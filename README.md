@@ -25,7 +25,7 @@ The Scholar build was tested with the Dark Souls II Seamless Co-op mod, and both
 
 `FPSUnlock = false` leaves the game completely unchanged.
 
-`FPSUnlock = true` turns the whole fix on. Cloth, jump height, and durability are part of that and are not separate switches.
+`FPSUnlock = true` turns the whole fix on.
 
 `PhysicsFPS` is the rate given to Havok as the expected maximum. Set it to your external cap. A 60 FPS frame is unchanged. Faster frames shorten the physics step and scale durability loss by `frameTime * 60` (clamped to 0.05–2), including hits from enemies, bosses, and other players, for weapons, armor, and rings.
 
@@ -33,7 +33,7 @@ The Scholar build was tested with the Dark Souls II Seamless Co-op mod, and both
 
 Both editions sample the real frame time and then normally step the world at a fixed 1/60. This mod turns off that wait and passes the measured step into gameplay and cloth. The ground check that shortens jumps once frames get smaller is skipped. Health, stamina, and movement that already multiply by delta stay consistent.
 
-Anything that runs once per call, instead of once per second of animation, can still speed up. Backstabs and similar animation events can repeat. Downhill rolls can still end early. Guard-break and jump-attack windows are still counted in frames. Cloth speed is corrected; the cloth simulation itself is still not identical to 60 FPS. Online play uses the measured step as well. That is not a promise that it matches a peer running at 60.
+Anything that runs once per call, instead of once per second of animation, can still speed up. Backstabs and similar animation events can repeat. Downhill rolls following a jump can still end early. Running down slopes can fail sometimes. Guard-break and jump-attack windows are still counted in frames. Cloth speed is corrected; but the cloth simulation itself is still not identical to 60 FPS. Online play uses the measured step as well. That is not a promise that it matches a peer running at 60. Compatability against other online player's playing at 60FPS seems good, but I am not a consistent DS2 PvP player and am not the best judge as to whether compatability or fairness are perfect or merely acceptable.
 
 ## Build
 
