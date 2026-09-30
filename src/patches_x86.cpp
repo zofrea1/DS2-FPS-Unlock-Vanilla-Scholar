@@ -8,6 +8,7 @@
 #include <windows.h>
 
 #include <cstring>
+#include <limits>
 #include <vector>
 
 // Original Dark Souls II (32-bit, DirectX 9). The Scholar hooks do not exist
@@ -22,6 +23,7 @@ void* g_dur_armor_tramp = nullptr;
 void* g_dur_ring_tramp = nullptr;
 void* g_world_tramp = nullptr;
 float g_dur_scale = 1.0f;
+float g_frame_dt = 1.0f / 60.0f;
 float g_xmm_save = 0.0f;
 // 1/PhysicsFPS, written into hkpWorldCinfo before the world is built.
 float g_physics_dt = 1.0f / 60.0f;
@@ -41,6 +43,9 @@ __declspec(naked) void hk_world() {
 }
 
 void __cdecl publish_frame_dt(float dt) {
+    if (dt > 0.0008f && dt < 1.0f) {
+        g_frame_dt = dt;
+    }
     float scale = 1.0f;
     if (dt > 0.0008f) {
         scale = dt * 60.0f;
@@ -162,6 +167,14 @@ const uint8_t kClothReplacement[] = {0xF3, 0x0F, 0x10, 0x45, 0x08, 0x90, 0x90, 0
 const uint8_t kJump[] = {
     0x8B, 0xCE, 0xE8, 0xB4, 0xDC, 0xFF, 0xFF, 0x84, 0xC0, 0x74, 0x22, 0x8D, 0x4D, 0xE0, 0x51, 0x8D,
     0x55, 0xD0, 0x52, 0x8B, 0xCE, 0xE8, 0x41, 0xF0, 0xFF, 0xFF};
+
+// Ground snap call in ChrPhysicalProxy::update: "mov ecx,esi; call <gate>; test al,al; je; lea ecx,[ebp-20h];
+// push ecx; lea edx,[ebp-30h]; push edx; mov ecx,esi; call <snap>". Bytes 3-6 and 22-25 are the displacements.
+const uint8_t kSnapSite[] = {
+    0x8B, 0xCE, 0xE8, 0x00, 0x00, 0x00, 0x00, 0x84, 0xC0, 0x74, 0x22, 0x8D, 0x4D, 0xE0, 0x51, 0x8D,
+    0x55, 0xD0, 0x52, 0x8B, 0xCE, 0xE8, 0x00, 0x00, 0x00, 0x00};
+const char kSnapMask[] = "xxx????xxxxxxxxxxxxxxx????";
+static_assert(sizeof(kSnapMask) == sizeof(kSnapSite) + 1, "snap mask length");
 
 InlineHook g_sampler;
 InlineHook g_pacer;
@@ -335,6 +348,98 @@ void restore_span(SpanPatch& patch) {
     patch.n = 0;
 }
 
+// The character's ground snap: after the physics step moves the body, this casts 0.1 units
+// straight down and pulls the body onto any floor it finds. The game runs it once per frame with
+// that fixed reach. At a high frame rate a jump rises only a few hundredths of a unit per frame,
+// so every frame the snap dragged the body back down and the jump lost height. The old fix skipped
+// the snap altogether, which left the character floating on slopes, so runs downhill kept losing
+// the ground and rolls after a landing ended early. Here the snap stays on and is skipped only
+// while the body is rising. Rising is judged against where the body ended up on the previous call.
+using SnapFn = float*(__fastcall*)(void* self, void* edx, float* out, const float* in);
+SnapFn g_snap_orig = nullptr;
+uint8_t* g_snap_site = nullptr;
+int32_t g_snap_rel_orig = 0;
+
+struct SnapTrack {
+    void* self = nullptr;
+    float y = 0.0f;
+};
+SnapTrack g_snap_track[64];
+
+SnapTrack* snap_track_for(void* self) {
+    const size_t start = (reinterpret_cast<uintptr_t>(self) >> 4) & 63;
+    for (size_t i = 0; i < 64; ++i) {
+        SnapTrack& t = g_snap_track[(start + i) & 63];
+        if (t.self == self) {
+            return &t;
+        }
+        if (!t.self) {
+            t.self = self;
+            t.y = std::numeric_limits<float>::quiet_NaN();
+            return &t;
+        }
+    }
+    return nullptr;
+}
+
+float* __fastcall hk_snap(void* self, void* edx, float* out, const float* in) {
+    SnapTrack* track = snap_track_for(self);
+    const float dt = g_frame_dt;
+    if (track && track->y == track->y) {
+        const float rise = in[1] - track->y;
+        // Above 0.4 units per second of climb, and not a teleport.
+        if (rise > 0.4f * dt && rise < 2.0f) {
+            std::memcpy(out, in, 16);
+            track->y = in[1];
+            return out;
+        }
+    }
+    float* result = g_snap_orig(self, edx, out, in);
+    if (track) {
+        track->y = result[1];
+    }
+    return result;
+}
+
+bool patch_snap() {
+    uint8_t* hit = find_unique(kSnapSite, sizeof(kSnapSite), "hk_ChrPhysicalProxy_GroundSnap", kSnapMask);
+    if (!hit) {
+        LOG_ERROR("hk_ChrPhysicalProxy_GroundSnap: apply failed");
+        return false;
+    }
+    uint8_t* call = hit + 21;
+    int32_t rel = 0;
+    std::memcpy(&rel, call + 1, 4);
+    uint8_t* target = call + 5 + rel;
+    const int32_t value = static_cast<int32_t>(reinterpret_cast<uintptr_t>(&hk_snap) - reinterpret_cast<uintptr_t>(call + 5));
+    DWORD old = 0;
+    if (!VirtualProtect(call, 5, PAGE_EXECUTE_READWRITE, &old)) {
+        LOG_ERROR("hk_ChrPhysicalProxy_GroundSnap: VirtualProtect failed (%lu)", GetLastError());
+        return false;
+    }
+    g_snap_orig = reinterpret_cast<SnapFn>(target);
+    g_snap_rel_orig = rel;
+    std::memcpy(call + 1, &value, 4);
+    VirtualProtect(call, 5, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), call, 5);
+    g_snap_site = call;
+    LOG_INFO("hk_ChrPhysicalProxy_GroundSnap: apply successful (snap at %p)", static_cast<void*>(target));
+    return true;
+}
+
+void unpatch_snap() {
+    if (!g_snap_site) {
+        return;
+    }
+    DWORD old = 0;
+    if (VirtualProtect(g_snap_site, 5, PAGE_EXECUTE_READWRITE, &old)) {
+        std::memcpy(g_snap_site + 1, &g_snap_rel_orig, 4);
+        VirtualProtect(g_snap_site, 5, old, &old);
+        FlushInstructionCache(GetCurrentProcess(), g_snap_site, 5);
+    }
+    g_snap_site = nullptr;
+}
+
 }  // namespace
 
 bool patches_apply(const Settings& settings) {
@@ -371,7 +476,11 @@ bool patches_apply(const Settings& settings) {
                      reinterpret_cast<void*>(&hk_dur_armor));
     ok &= hook_named(g_dur_ring, &g_dur_ring_tramp, "hk_Durability_RingOnHit", kDurRing, sizeof(kDurRing), 8,
                      reinterpret_cast<void*>(&hk_dur_ring), kDurRingMask);
-    ok &= patch_byte(g_jump, kJump, sizeof(kJump), 9, 0x74, 0xEB, "pch_ChrPhysicalProxy_JumpHeightFix");
+    if (settings.ground_snap_fix) {
+        ok &= patch_snap();
+    } else {
+        ok &= patch_byte(g_jump, kJump, sizeof(kJump), 9, 0x74, 0xEB, "pch_ChrPhysicalProxy_JumpHeightFix");
+    }
     ok &= patch_span(g_cloth, kCloth, sizeof(kCloth), kClothMask, kClothReplacement,
                      sizeof(kClothReplacement), "hk_PXClothWorld_FrametimeUpdate");
     if (settings.physics_fps > 0) {
@@ -394,5 +503,6 @@ void patches_remove() {
     restore_byte(g_measured);
     restore_byte(g_clamp);
     restore_byte(g_jump);
+    unpatch_snap();
     restore_span(g_cloth);
 }

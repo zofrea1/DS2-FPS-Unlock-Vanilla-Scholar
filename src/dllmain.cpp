@@ -47,6 +47,7 @@ void startup(HMODULE self) {
     LOG_INFO("Settings values:");
     LOG_INFO(" - FPSUnlock: %s", settings.fps_unlock ? "true" : "false");
     LOG_INFO(" - PhysicsFPS: %d", settings.physics_fps);
+    LOG_INFO(" - GroundSnapFix: %s", settings.ground_snap_fix ? "true" : "false");
 
     if (!proxy_init()) {
         LOG_ERROR("XInput proxy failed; controller input will not work");

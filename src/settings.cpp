@@ -73,6 +73,8 @@ Settings settings_load(const wchar_t* dll_path) {
         const std::string val = trim(line.substr(eq + 1));
         if (key == "fpsunlock") {
             s.fps_unlock = parse_bool(val);
+        } else if (key == "groundsnapfix") {
+            s.ground_snap_fix = parse_bool(val);
         } else if (key == "physicsfps") {
             s.physics_fps = std::atoi(val.c_str());
         }
