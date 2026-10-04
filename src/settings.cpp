@@ -73,8 +73,16 @@ Settings settings_load(const wchar_t* dll_path) {
         const std::string val = trim(line.substr(eq + 1));
         if (key == "fpsunlock") {
             s.fps_unlock = parse_bool(val);
-        } else if (key == "groundsnapfix") {
+        } else if (key == "groundsnapfix" || key == "jumpheightfix") {
             s.ground_snap_fix = parse_bool(val);
+        } else if (key == "forwardattackfix") {
+            s.forward_attack_fix = parse_bool(val);
+        } else if (key == "taeeventfix") {
+            s.tae_event_fix = parse_bool(val);
+        } else if (key == "clothfix" || key == "clothspeedfix") {
+            s.cloth_fix = parse_bool(val);
+        } else if (key == "durabilityfix") {
+            s.durability_fix = parse_bool(val);
         } else if (key == "physicsfps") {
             s.physics_fps = std::atoi(val.c_str());
         }

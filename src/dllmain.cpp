@@ -48,6 +48,10 @@ void startup(HMODULE self) {
     LOG_INFO(" - FPSUnlock: %s", settings.fps_unlock ? "true" : "false");
     LOG_INFO(" - PhysicsFPS: %d", settings.physics_fps);
     LOG_INFO(" - GroundSnapFix: %s", settings.ground_snap_fix ? "true" : "false");
+    LOG_INFO(" - ForwardAttackFix: %s", settings.forward_attack_fix ? "true" : "false");
+    LOG_INFO(" - TaeEventFix: %s", settings.tae_event_fix ? "true" : "false");
+    LOG_INFO(" - ClothFix: %s", settings.cloth_fix ? "true" : "false");
+    LOG_INFO(" - DurabilityFix: %s", settings.durability_fix ? "true" : "false");
 
     if (!proxy_init()) {
         LOG_ERROR("XInput proxy failed; controller input will not work");

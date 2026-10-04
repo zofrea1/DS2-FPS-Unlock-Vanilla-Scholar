@@ -1,5 +1,6 @@
 #include "patches.h"
 
+#include "frame_fixes.h"
 #include "inline_hook.h"
 #include "log.h"
 
@@ -10,7 +11,6 @@
 #include <cstdint>
 #include <cstring>
 #include <initializer_list>
-#include <limits>
 #include <vector>
 
 #if defined(_M_X64)
@@ -55,6 +55,47 @@ const uint8_t kSnapSite[] = {
     0x48, 0x8D, 0x55, 0x90, 0x48, 0x8B, 0xCE, 0xE8, 0x00, 0x00, 0x00, 0x00, 0x0F, 0x28, 0x38};
 const char kSnapMask[] = "xxxx????xxxxxxxxxxxxxxxx????xxx";
 static_assert(sizeof(kSnapMask) == sizeof(kSnapSite) + 1, "snap mask length");
+// The snap's proxy: +0x08 is the character, whose status (+0xB8) holds the jump counter at +0x61C.
+// ChrJumpCtrl raises it when a jump starts and lowers it on landing; the movement code applies the
+// jump's velocity only while it is non-zero.
+constexpr size_t kProxyChr = 0x08;
+constexpr size_t kChrStatus = 0xB8;
+constexpr size_t kStatusJumpCount = 0x61C;
+// Movement stick history used for forward + R1/R2. rcx is the attack input recognizer, xmm1 the
+// frame step, r8 the logical input. 16 entries of {x, y, magnitude, dt} start at +0x74.
+const uint8_t kStickHistory[] = {
+    0x48, 0x8B, 0xC4, 0x48, 0x89, 0x58, 0x10, 0x48, 0x89, 0x70, 0x18, 0x57, 0x48, 0x81, 0xEC, 0x90,
+    0x00, 0x00, 0x00, 0x0F, 0x29, 0x70, 0xE8, 0x0F, 0x29, 0x78, 0xD8, 0x44, 0x0F, 0x29, 0x40, 0xC8,
+    0x48, 0x8B, 0x05, 0x00, 0x00, 0x00, 0x00, 0x48, 0x33, 0xC4, 0x48, 0x89, 0x44, 0x24, 0x50, 0x48,
+    0x8B, 0x05, 0x00, 0x00, 0x00, 0x00, 0x48, 0x8B, 0xD9, 0x49, 0x8B, 0xF0};
+const char kStickHistoryMask[] = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx????xxxxxxxxxxx????xxxxxx";
+static_assert(sizeof(kStickHistoryMask) == sizeof(kStickHistory) + 1, "stick history mask length");
+constexpr size_t kStickHistoryOffset = 0x74;
+// Per-track TAE event dispatch (see tae_dispatch_begin in frame_fixes.h). rcx is the track,
+// xmm1/xmm2 the window, r9b whether this update crossed into a new TAE frame. The pattern runs
+// through the handler call: "mov [rbp-10h], cl; mov rcx, rbx; setne [rbp-0Fh]; call [rax+10h]",
+// which is redirected through a stub so the start flag can be filtered first.
+const uint8_t kTaeDispatch[] = {
+    0x48, 0x8B, 0xC4, 0x48, 0x89, 0x58, 0x08, 0x48, 0x89, 0x78, 0x10, 0x55, 0x48, 0x8D, 0x68, 0xA1,
+    0x48, 0x81, 0xEC, 0xB0, 0x00, 0x00, 0x00, 0x0F, 0x29, 0x70, 0xE8, 0x0F, 0x29, 0x78, 0xD8, 0x33,
+    0xC0, 0x48, 0x8B, 0xD9, 0x48, 0x8B, 0x49, 0x08, 0x41, 0x0F, 0xB6, 0xF9, 0x4C, 0x8D, 0x4D, 0xF7,
+    0x48, 0x89, 0x45, 0xF7, 0x48, 0x89, 0x45, 0xFF, 0x0F, 0x28, 0xF2, 0x0F, 0x28, 0xF9, 0x48, 0x89,
+    0x45, 0x07, 0x48, 0x89, 0x45, 0x0F, 0x48, 0x89, 0x45, 0x17, 0x48, 0x89, 0x45, 0x1F, 0x48, 0x89,
+    0x45, 0x27, 0x48, 0x89, 0x45, 0x2F, 0xE8, 0xC5, 0xA1, 0x65, 0x00, 0x48, 0x85, 0xC0, 0x0F, 0x84,
+    0xB5, 0x00, 0x00, 0x00, 0x66, 0x66, 0x66, 0x66, 0x0F, 0x1F, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x48, 0x8B, 0x4D, 0x17, 0x33, 0xC0, 0x48, 0x89, 0x45, 0xDF, 0x48, 0x89, 0x45, 0xCF, 0x48, 0x89,
+    0x45, 0xD7, 0xF3, 0x0F, 0x11, 0x7D, 0xDF, 0xF3, 0x0F, 0x11, 0x75, 0xE3, 0x48, 0x89, 0x45, 0xE7,
+    0x48, 0x89, 0x45, 0xEF, 0x8B, 0x45, 0xF7, 0x89, 0x45, 0xCF, 0x48, 0x8B, 0x45, 0xFF, 0x48, 0x89,
+    0x4D, 0xC7, 0x48, 0x89, 0x45, 0xD7, 0xE8, 0xB5, 0xA0, 0x65, 0x00, 0x48, 0x8B, 0x4D, 0x17, 0xF3,
+    0x0F, 0x11, 0x45, 0xE7, 0xE8, 0xB7, 0xA0, 0x65, 0x00, 0x0F, 0xB6, 0x45, 0x0F, 0x33, 0xC9, 0x40,
+    0x84, 0xFF, 0x48, 0x8D, 0x55, 0xC7, 0xF3, 0x0F, 0x11, 0x45, 0xEB, 0x0F, 0x45, 0xC8, 0x0F, 0xB6,
+    0x45, 0x10, 0x88, 0x4D, 0xEF, 0x33, 0xC9, 0x40, 0x84, 0xFF, 0x0F, 0x45, 0xC8, 0x48, 0x8B, 0x45,
+    0x17, 0x48, 0x39, 0x43, 0x10, 0x48, 0x8B, 0x03, 0x88, 0x4D, 0xF0, 0x48, 0x8B, 0xCB, 0x0F, 0x95,
+    0x45, 0xF1, 0xFF, 0x50, 0x10};
+constexpr size_t kTaeHandlerCallAt = 0xE8;
+constexpr size_t kTaeHandlerCallLen = 13;
+constexpr size_t kTaeTrackLastEvent = 0x10;
+constexpr size_t kTaeEventStart = 0x2A;
 // ApplyDurability for weapons. xmm2 is a signed delta. PlayerEquipBrokenActionCtrl.
 const uint8_t kDurWeapon[] = {
     0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x6C, 0x24, 0x18, 0x56, 0x57, 0x41, 0x56, 0x48, 0x83,
@@ -204,7 +245,9 @@ float __fastcall hk_frame_time(void* self, unsigned char /*limit*/) {
 
 void __fastcall hk_update(void* self, float /*dt*/) {
     auto orig = reinterpret_cast<UpdateFn>(g_update_hook.trampoline);
-    orig(self, g_frame_dt.load(std::memory_order_relaxed));
+    const float dt = g_frame_dt.load(std::memory_order_relaxed);
+    frame_clock_advance(dt);
+    orig(self, dt);
 }
 
 void* __fastcall hk_world(void* self, void* cinfo, unsigned int version) {
@@ -243,8 +286,103 @@ bool __fastcall hk_dur_ring_hit(void* self, int slot, float damage, unsigned cha
     return call_scaled(g_dur_ring_hit, self, slot, damage, flag);
 }
 
-bool hook_named(InlineHook& hook, const char* name, const uint8_t* pat, size_t pat_len, size_t stolen, void* detour) {
-    uint8_t* site = find_unique(pat, pat_len, name);
+// Guard break and jump attack: see stick_history_before/after in frame_fixes.h.
+using StickHistoryFn = void(__fastcall*)(void* recognizer, float dt, void* input);
+InlineHook g_stick_history;
+
+void __fastcall hk_stick_history(void* recognizer, float dt, void* input) {
+    auto* history = reinterpret_cast<float*>(static_cast<uint8_t*>(recognizer) + kStickHistoryOffset);
+    StickHistorySave save;
+    stick_history_before(history, save);
+    reinterpret_cast<StickHistoryFn>(g_stick_history.trampoline)(recognizer, dt, input);
+    stick_history_after(history, save, dt);
+}
+
+// TAE events: see tae_dispatch_begin in frame_fixes.h.
+using TaeDispatchFn = void(__fastcall*)(void* track, float t0, float t1, char advanced);
+using TaeHandlerFn = void(__fastcall*)(void* track, void* event);
+InlineHook g_tae_dispatch;
+uint8_t* g_tae_call_site = nullptr;
+uint8_t g_tae_call_orig[kTaeHandlerCallLen]{};
+
+void __fastcall hk_tae_dispatch(void* track, float t0, float t1, char advanced) {
+    const void* last = *reinterpret_cast<void* const*>(static_cast<uint8_t*>(track) + kTaeTrackLastEvent);
+    void* outer = tae_dispatch_begin(track, last, advanced != 0);
+    reinterpret_cast<TaeDispatchFn>(g_tae_dispatch.trampoline)(track, t0, t1, advanced);
+    tae_dispatch_end(outer);
+}
+
+// Reached from the stub at the handler call with the track, the event and the handler.
+void __fastcall hk_tae_handler(void* track, uint8_t* event, TaeHandlerFn handler) {
+    tae_filter_event(track, *reinterpret_cast<void* const*>(event), event + kTaeEventStart);
+    handler(track, event);
+}
+
+bool patch_tae() {
+    constexpr const char* kName = "hk_MorphemeTimeActTrack_EventDispatch";
+    uint8_t* site = find_unique(kTaeDispatch, sizeof(kTaeDispatch), kName);
+    if (!site) {
+        LOG_ERROR("%s: apply failed", kName);
+        return false;
+    }
+    uint8_t* call = site + kTaeHandlerCallAt;
+    // mov [rbp-10h], cl; mov rcx, rbx; setne [rbp-0Fh]; mov r8, [rax+10h]; jmp [rip]; dq hk_tae_handler
+    uint8_t* stub = near_arena_alloc(32);
+    if (!stub) {
+        LOG_ERROR("%s: trampoline arena exhausted", kName);
+        return false;
+    }
+    const uint8_t head[] = {0x88, 0x4D, 0xF0, 0x48, 0x8B, 0xCB, 0x0F, 0x95, 0x45, 0xF1,
+                            0x4C, 0x8B, 0x40, 0x10, 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00};
+    std::memcpy(stub, head, sizeof(head));
+    const uint64_t target = reinterpret_cast<uint64_t>(&hk_tae_handler);
+    std::memcpy(stub + sizeof(head), &target, sizeof(target));
+    const intptr_t rel = reinterpret_cast<intptr_t>(stub) - reinterpret_cast<intptr_t>(call + kTaeHandlerCallLen);
+    if (rel < static_cast<intptr_t>(INT32_MIN) || rel > static_cast<intptr_t>(INT32_MAX)) {
+        LOG_ERROR("%s: relative call does not fit", kName);
+        return false;
+    }
+    if (!g_tae_dispatch.install(site, reinterpret_cast<void*>(&hk_tae_dispatch), 7)) {
+        LOG_ERROR("%s: apply failed", kName);
+        return false;
+    }
+    DWORD old = 0;
+    if (!VirtualProtect(call, kTaeHandlerCallLen, PAGE_EXECUTE_READWRITE, &old)) {
+        LOG_ERROR("%s: VirtualProtect failed (%lu)", kName, GetLastError());
+        g_tae_dispatch.remove();
+        return false;
+    }
+    std::memcpy(g_tae_call_orig, call, kTaeHandlerCallLen);
+    // 8-byte nop, then call the stub so the handler returns to the instruction after the original call.
+    const uint8_t nop8[] = {0x0F, 0x1F, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00};
+    std::memcpy(call, nop8, sizeof(nop8));
+    call[8] = 0xE8;
+    const int32_t rel32 = static_cast<int32_t>(rel);
+    std::memcpy(call + 9, &rel32, sizeof(rel32));
+    VirtualProtect(call, kTaeHandlerCallLen, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), call, kTaeHandlerCallLen);
+    FlushInstructionCache(GetCurrentProcess(), stub, 32);
+    g_tae_call_site = call;
+    LOG_INFO("%s: apply successful", kName);
+    return true;
+}
+
+void unpatch_tae() {
+    if (g_tae_call_site) {
+        DWORD old = 0;
+        if (VirtualProtect(g_tae_call_site, kTaeHandlerCallLen, PAGE_EXECUTE_READWRITE, &old)) {
+            std::memcpy(g_tae_call_site, g_tae_call_orig, kTaeHandlerCallLen);
+            VirtualProtect(g_tae_call_site, kTaeHandlerCallLen, old, &old);
+            FlushInstructionCache(GetCurrentProcess(), g_tae_call_site, kTaeHandlerCallLen);
+        }
+        g_tae_call_site = nullptr;
+    }
+    g_tae_dispatch.remove();
+}
+
+bool hook_named(InlineHook& hook, const char* name, const uint8_t* pat, size_t pat_len, size_t stolen, void* detour,
+                const char* mask = nullptr) {
+    uint8_t* site = find_unique(pat, pat_len, name, mask);
     if (!site) {
         LOG_ERROR("%s: apply failed", name);
         return false;
@@ -257,63 +395,39 @@ bool hook_named(InlineHook& hook, const char* name, const uint8_t* pat, size_t p
     return true;
 }
 
-// The character's ground snap: after the physics step moves the body, this casts 0.1 units
-// straight down and pulls the body onto any floor it finds. The game runs it once per frame with
-// that fixed reach. At a high frame rate a jump rises only a few hundredths of a unit per frame,
-// so every frame the snap dragged the body back down and the jump lost height. The old fix skipped
-// the snap altogether, which left the character floating on slopes, so runs downhill kept losing
-// the ground and rolls after a landing ended early. Here the snap stays on and is skipped only
-// while the body is rising. Rising is judged against where the body ended up on the previous call.
+// The character's ground snap: see ground_snap_skip in frame_fixes.h. When the snap is skipped the
+// position passes through unchanged, as the old "never snap" workaround did for every frame.
 using SnapFn = void*(__fastcall*)(void* self, float* out, const float* in);
 SnapFn g_snap_orig = nullptr;
 uint8_t* g_snap_site = nullptr;
 int32_t g_snap_rel_orig = 0;
 
-struct SnapTrack {
-    void* self = nullptr;
-    float y = 0.0f;
-};
-SnapTrack g_snap_track[64];
-
-SnapTrack* snap_track_for(void* self) {
-    const size_t start = (reinterpret_cast<uintptr_t>(self) >> 4) & 63;
-    for (size_t i = 0; i < 64; ++i) {
-        SnapTrack& t = g_snap_track[(start + i) & 63];
-        if (t.self == self) {
-            return &t;
-        }
-        if (!t.self) {
-            t.self = self;
-            t.y = std::numeric_limits<float>::quiet_NaN();
-            return &t;
-        }
+bool jump_in_progress(void* proxy) {
+    auto* chr = *reinterpret_cast<uint8_t* const*>(static_cast<uint8_t*>(proxy) + kProxyChr);
+    if (!chr) {
+        return false;
     }
-    return nullptr;
+    auto* status = *reinterpret_cast<uint8_t* const*>(chr + kChrStatus);
+    return status && *reinterpret_cast<const int32_t*>(status + kStatusJumpCount) != 0;
 }
 
 void* __fastcall hk_snap(void* self, float* out, const float* in) {
-    SnapTrack* track = snap_track_for(self);
     const float dt = g_frame_dt.load(std::memory_order_relaxed);
-    if (track && track->y == track->y) {
-        const float rise = in[1] - track->y;
-        // Above 0.4 units per second of climb, and not a teleport.
-        if (rise > 0.4f * dt && rise < 2.0f) {
-            std::memcpy(out, in, 16);
-            track->y = in[1];
-            return out;
-        }
+    if (ground_snap_skip(self, in[1], dt, jump_in_progress(self))) {
+        std::memcpy(out, in, 16);
+        ground_snap_record(self, in[1]);
+        return out;
     }
     void* result = g_snap_orig(self, out, in);
-    if (track) {
-        track->y = static_cast<const float*>(result)[1];
-    }
+    ground_snap_record(self, static_cast<const float*>(result)[1]);
     return result;
 }
 
 bool patch_snap() {
-    uint8_t* hit = find_unique(kSnapSite, sizeof(kSnapSite), "hk_ChrPhysicalProxy_GroundSnap", kSnapMask);
+    constexpr const char* kName = "hk_ChrPhysicalProxy_GroundSnap";
+    uint8_t* hit = find_unique(kSnapSite, sizeof(kSnapSite), kName, kSnapMask);
     if (!hit) {
-        LOG_ERROR("hk_ChrPhysicalProxy_GroundSnap: apply failed");
+        LOG_ERROR("%s: apply failed", kName);
         return false;
     }
     uint8_t* call = hit + 23;
@@ -322,7 +436,7 @@ bool patch_snap() {
     uint8_t* target = call + 5 + rel;
     uint8_t* stub = near_arena_alloc(16);
     if (!stub) {
-        LOG_ERROR("hk_ChrPhysicalProxy_GroundSnap: trampoline arena exhausted");
+        LOG_ERROR("%s: trampoline arena exhausted", kName);
         return false;
     }
     stub[0] = 0xFF;
@@ -332,12 +446,12 @@ bool patch_snap() {
     std::memcpy(stub + 6, &addr, 8);
     const intptr_t new_rel = reinterpret_cast<intptr_t>(stub) - reinterpret_cast<intptr_t>(call + 5);
     if (new_rel < static_cast<intptr_t>(INT32_MIN) || new_rel > static_cast<intptr_t>(INT32_MAX)) {
-        LOG_ERROR("hk_ChrPhysicalProxy_GroundSnap: relative call does not fit");
+        LOG_ERROR("%s: relative call does not fit", kName);
         return false;
     }
     DWORD old = 0;
     if (!VirtualProtect(call, 5, PAGE_EXECUTE_READWRITE, &old)) {
-        LOG_ERROR("hk_ChrPhysicalProxy_GroundSnap: VirtualProtect failed (%lu)", GetLastError());
+        LOG_ERROR("%s: VirtualProtect failed (%lu)", kName, GetLastError());
         return false;
     }
     g_snap_orig = reinterpret_cast<SnapFn>(target);
@@ -348,7 +462,7 @@ bool patch_snap() {
     FlushInstructionCache(GetCurrentProcess(), call, 5);
     FlushInstructionCache(GetCurrentProcess(), stub, 16);
     g_snap_site = call;
-    LOG_INFO("hk_ChrPhysicalProxy_GroundSnap: apply successful (snap at %p)", static_cast<void*>(target));
+    LOG_INFO("%s: apply successful (snap at %p)", kName, static_cast<void*>(target));
     return true;
 }
 
@@ -510,27 +624,38 @@ bool patches_apply(const Settings& settings) {
     ok &= hook_named(g_update_hook, "hk_KatanaMainApp_UpdateDT", kUpdateDt, sizeof(kUpdateDt), 5,
                      reinterpret_cast<void*>(&hk_update));
     ok &= settings.ground_snap_fix ? patch_snap() : patch_jump();
-    ok &= hook_named(g_dur_weapon, "hk_Durability_Weapon", kDurWeapon, sizeof(kDurWeapon), 5,
-                     reinterpret_cast<void*>(&hk_dur_weapon));
-    ok &= hook_named(g_dur_armor, "hk_Durability_Armor", kDurArmor, sizeof(kDurArmor), 5,
-                     reinterpret_cast<void*>(&hk_dur_armor));
-    ok &= hook_named(g_dur_ring, "hk_Durability_Ring", kDurRing, sizeof(kDurRing), 5,
-                     reinterpret_cast<void*>(&hk_dur_ring));
-    ok &= hook_named(g_dur_ring_hit, "hk_Durability_RingOnHit", kDurRingHit, sizeof(kDurRingHit), 5,
-                     reinterpret_cast<void*>(&hk_dur_ring_hit));
-    uint8_t* rate = find_unique(kDurRingRate, sizeof(kDurRingRate), "hk_Durability_RingRate");
-    if (!rate) {
-        LOG_ERROR("hk_Durability_RingRate: apply failed");
-        ok = false;
-    } else {
-        ok &= install_ring_rate(rate);
+    if (settings.forward_attack_fix) {
+        ok &= hook_named(g_stick_history, "hk_ChrPadAttackInput_StickHistory", kStickHistory, sizeof(kStickHistory), 7,
+                         reinterpret_cast<void*>(&hk_stick_history), kStickHistoryMask);
+    }
+    if (settings.tae_event_fix) {
+        ok &= patch_tae();
+    }
+    if (settings.durability_fix) {
+        ok &= hook_named(g_dur_weapon, "hk_Durability_Weapon", kDurWeapon, sizeof(kDurWeapon), 5,
+                         reinterpret_cast<void*>(&hk_dur_weapon));
+        ok &= hook_named(g_dur_armor, "hk_Durability_Armor", kDurArmor, sizeof(kDurArmor), 5,
+                         reinterpret_cast<void*>(&hk_dur_armor));
+        ok &= hook_named(g_dur_ring, "hk_Durability_Ring", kDurRing, sizeof(kDurRing), 5,
+                         reinterpret_cast<void*>(&hk_dur_ring));
+        ok &= hook_named(g_dur_ring_hit, "hk_Durability_RingOnHit", kDurRingHit, sizeof(kDurRingHit), 5,
+                         reinterpret_cast<void*>(&hk_dur_ring_hit));
+        uint8_t* rate = find_unique(kDurRingRate, sizeof(kDurRingRate), "hk_Durability_RingRate");
+        if (!rate) {
+            LOG_ERROR("hk_Durability_RingRate: apply failed");
+            ok = false;
+        } else {
+            ok &= install_ring_rate(rate);
+        }
     }
     if (settings.physics_fps > 0) {
         ok &= hook_named(g_world_hook, "hk_hkpWorld_UpdateExpectedDeltaTime", kWorldCtor, sizeof(kWorldCtor), 7,
                          reinterpret_cast<void*>(&hk_world));
     }
-    ok &= hook_named(g_cloth_hook, "hk_PXClothWorld_FrametimeUpdate", kCloth, sizeof(kCloth), 6,
-                     reinterpret_cast<void*>(&hk_cloth));
+    if (settings.cloth_fix) {
+        ok &= hook_named(g_cloth_hook, "hk_PXClothWorld_FrametimeUpdate", kCloth, sizeof(kCloth), 6,
+                         reinterpret_cast<void*>(&hk_cloth));
+    }
     return ok;
 }
 
@@ -539,6 +664,8 @@ void patches_remove() {
     g_update_hook.remove();
     g_world_hook.remove();
     g_cloth_hook.remove();
+    g_stick_history.remove();
+    unpatch_tae();
     g_dur_weapon.remove();
     g_dur_armor.remove();
     g_dur_ring.remove();
