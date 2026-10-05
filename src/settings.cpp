@@ -90,7 +90,7 @@ Settings settings_load(const wchar_t* dll_path) {
         }
     }
     if (s.physics_fps < 1) {
-        s.physics_fps = 60;
+        s.physics_fps = Settings{}.physics_fps;
     }
     return s;
 }
