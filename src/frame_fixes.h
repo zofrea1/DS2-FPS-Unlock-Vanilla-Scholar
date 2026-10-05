@@ -9,16 +9,21 @@
 // Game time, advanced once per gameplay update by the frame step.
 void frame_clock_advance(float dt);
 
-// Ground snap. After the physics step the game sweeps 0.1 units down and pulls the body onto any
-// floor it finds, once per frame. At a high frame rate a jump rises only a few hundredths of a unit
-// per frame, so the snap caught the takeoff and the character stayed on the ground. The snap is
-// skipped while the character's jump is in progress (the game's own jump counter, which also
-// gates the jump's velocity) and, for other upward moves, while the body rose since its last
-// position. Everything else (running, slopes, landing, rolls) keeps the game's snap unchanged.
-// Returns true when this call should leave the position as it is.
-bool ground_snap_skip(void* proxy, float in_y, float dt, bool jumping);
-// Records where the body ended up this frame.
-void ground_snap_record(void* proxy, float y);
+// Ground contact while rising. After each physics step the game decides whether the body is on the
+// ground. While the body is being moved upward it takes Havok's walkable-support flag as the answer,
+// and while grounded it snaps the body down onto the floor (a 0.1 unit sweep). That snap holds the
+// body inside Havok's contact band, so the flag stays set and the loop repeats every frame. At 60
+// FPS one 1/60 s step at the jump's takeoff speed (3.45 to 4 units/s) carries the body past the
+// band and Havok drops support, every time in both games' stock traces, while the 1.4 units/s
+// wind-up stays held; the cut-off is taken between them, at 2.4 units/s net of the fall speed. At a
+// high frame rate each step moves the body only a fraction of that, so the loop never broke and
+// the character stayed stuck on steep slopes. This reports the frames where 60 FPS would have
+// broken it: the caller then leaves the position as it is and clears the grounded and support
+// flags, as the game would have seen them at 60 FPS.
+// Everything else, including landings, runs, rolls and the forced-ray cases, keeps the stock snap.
+// `rise` is the commanded upward speed, `fall` the accumulated fall speed (negative), `walkable`
+// whether the grounded answer came from Havok's flag rather than the forced ground ray.
+bool ground_release(float rise, float fall, bool walkable);
 
 // Forward-tilt history for guard break and jump attack. The game keeps the last 16 frames of the
 // movement stick and accepts forward + R1/R2 only if it finds the stick near neutral within a

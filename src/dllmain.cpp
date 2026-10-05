@@ -1,3 +1,4 @@
+#include "jump_trace.h"
 #include "log.h"
 #include "patches.h"
 #include "proxy.h"
@@ -52,6 +53,10 @@ void startup(HMODULE self) {
     LOG_INFO(" - TaeEventFix: %s", settings.tae_event_fix ? "true" : "false");
     LOG_INFO(" - ClothFix: %s", settings.cloth_fix ? "true" : "false");
     LOG_INFO(" - DurabilityFix: %s", settings.durability_fix ? "true" : "false");
+    if (settings.jump_trace) {
+        const bool open = jump_trace_open(dll_path, settings.fps_unlock ? L"unlocked" : L"stock");
+        LOG_INFO(" - JumpTrace: %s", open ? "writing DS2-FPS-Unlock-jumptrace-*.csv" : "could not open the CSV");
+    }
 
     if (!proxy_init()) {
         LOG_ERROR("XInput proxy failed; controller input will not work");
@@ -69,6 +74,7 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
         startup(instance);
     } else if (reason == DLL_PROCESS_DETACH) {
         patches_remove();
+        jump_trace_close();
         log_close();
     }
     return TRUE;

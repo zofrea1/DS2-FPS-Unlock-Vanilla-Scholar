@@ -3,8 +3,8 @@
 struct Settings {
     bool fps_unlock = true;
     int physics_fps = 120;
-    // Skip the character's ground snap while a jump is in progress or the body is rising
-    // (frame_fixes.h). false restores the old "never snap to the ground" jump workaround.
+    // Release the body from the ground snap on the frames where 60 FPS would (ground_release in
+    // frame_fixes.h). false restores the old "never snap to the ground" jump workaround.
     bool ground_snap_fix = true;
     // Keep forward + R1/R2 (guard break, jump attack) as easy to enter as at 60 FPS.
     bool forward_attack_fix = true;
@@ -14,6 +14,8 @@ struct Settings {
     bool cloth_fix = true;
     // Scale equipment durability loss by the frame time so it matches 60 FPS.
     bool durability_fix = true;
+    // Diagnostic: write the player's per-frame jump physics to DS2-FPS-Unlock-jumptrace-*.csv.
+    bool jump_trace = false;
 };
 
 // Reads DS2-FPS-Unlock.ini from the same directory as the DLL.

@@ -2,12 +2,14 @@
 
 #include "frame_fixes.h"
 #include "inline_hook.h"
+#include "jump_trace.h"
 #include "log.h"
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
 #include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <initializer_list>
@@ -55,12 +57,31 @@ const uint8_t kSnapSite[] = {
     0x48, 0x8D, 0x55, 0x90, 0x48, 0x8B, 0xCE, 0xE8, 0x00, 0x00, 0x00, 0x00, 0x0F, 0x28, 0x38};
 const char kSnapMask[] = "xxxx????xxxxxxxxxxxxxxxx????xxx";
 static_assert(sizeof(kSnapMask) == sizeof(kSnapSite) + 1, "snap mask length");
-// The snap's proxy: +0x08 is the character, whose status (+0xB8) holds the jump counter at +0x61C.
-// ChrJumpCtrl raises it when a jump starts and lowers it on landing; the movement code applies the
-// jump's velocity only while it is non-zero.
+// The snap's proxy: +0x08 character, +0x10 PXCharacterRigidBody, +0x64 commanded upward speed,
+// +0xC4 grounded, +0xC5 ground probe result. Character: +0xB8 status, whose +0x4C8 bit 12 makes the
+// probe cast its ground ray instead of taking Havok's flag (and +0x61C is the airborne counter).
+// Body: +0x120 Havok support state, +0x1A4 accumulated fall speed, +0x1C1 walkable support.
 constexpr size_t kProxyChr = 0x08;
+constexpr size_t kProxyBody = 0x10;
+constexpr size_t kProxyRise = 0x64;
+constexpr size_t kProxyGrounded = 0xC4;
+constexpr size_t kProxyProbe = 0xC5;
 constexpr size_t kChrStatus = 0xB8;
+constexpr size_t kStatusFlags = 0x4C8;
+constexpr uint32_t kStatusForceRay = 0x1000;
 constexpr size_t kStatusJumpCount = 0x61C;
+constexpr size_t kBodySupport = 0x120;
+constexpr size_t kBodyFall = 0x1A4;
+constexpr size_t kBodyWalkable = 0x1C1;
+// ChrPhysicalProxy::update(proxy, step), run after the physics step (JumpTrace only). The security
+// cookie load is masked.
+const uint8_t kProxyUpdate[] = {
+    0x4C, 0x8B, 0xDC, 0x55, 0x53, 0x56, 0x41, 0x57, 0x49, 0x8D, 0x6B, 0xC8, 0x48, 0x81, 0xEC, 0x18,
+    0x01, 0x00, 0x00, 0x48, 0x8B, 0x05, 0x00, 0x00, 0x00, 0x00, 0x48, 0x33, 0xC4, 0x48, 0x89, 0x45,
+    0xE0, 0x48, 0x8B, 0xF1, 0x48, 0x8B, 0x49, 0x10, 0x41, 0x0F, 0x29, 0x73, 0xC8, 0x41, 0x0F, 0x29,
+    0x7B, 0xB8, 0x48, 0x8B, 0xDA, 0xE8};
+const char kProxyUpdateMask[] = "xxxxxxxxxxxxxxxxxxxxxx????xxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+static_assert(sizeof(kProxyUpdateMask) == sizeof(kProxyUpdate) + 1, "proxy update mask length");
 // Movement stick history used for forward + R1/R2. rcx is the attack input recognizer, xmm1 the
 // frame step, r8 the logical input. 16 entries of {x, y, magnitude, dt} start at +0x74.
 const uint8_t kStickHistory[] = {
@@ -395,32 +416,184 @@ bool hook_named(InlineHook& hook, const char* name, const uint8_t* pat, size_t p
     return true;
 }
 
-// The character's ground snap: see ground_snap_skip in frame_fixes.h. When the snap is skipped the
-// position passes through unchanged, as the old "never snap" workaround did for every frame.
+// Set when the fixes are off and the snap hook only reports to the jump trace.
+bool g_snap_observe_only = false;
 using SnapFn = void*(__fastcall*)(void* self, float* out, const float* in);
 SnapFn g_snap_orig = nullptr;
 uint8_t* g_snap_site = nullptr;
 int32_t g_snap_rel_orig = 0;
 
-bool jump_in_progress(void* proxy) {
-    auto* chr = *reinterpret_cast<uint8_t* const*>(static_cast<uint8_t*>(proxy) + kProxyChr);
-    if (!chr) {
+// The character's ground snap: see ground_release in frame_fixes.h. A released frame leaves the
+// position as it is and clears the grounded and support flags, as the game sees them at 60 FPS.
+template <typename T>
+T field(const void* base, size_t offset) {
+    T v;
+    std::memcpy(&v, static_cast<const uint8_t*>(base) + offset, sizeof(T));
+    return v;
+}
+
+template <typename T>
+void set_field(void* base, size_t offset, T v) {
+    std::memcpy(static_cast<uint8_t*>(base) + offset, &v, sizeof(T));
+}
+
+bool snap_released(void* proxy) {
+    auto* chr = field<uint8_t*>(proxy, kProxyChr);
+    auto* body = field<uint8_t*>(proxy, kProxyBody);
+    if (!chr || !body || !field<uint8_t>(proxy, kProxyProbe)) {
         return false;
     }
-    auto* status = *reinterpret_cast<uint8_t* const*>(chr + kChrStatus);
-    return status && *reinterpret_cast<const int32_t*>(status + kStatusJumpCount) != 0;
+    auto* status = field<uint8_t*>(chr, kChrStatus);
+    const bool ray = status && (field<uint32_t>(status, kStatusFlags) & kStatusForceRay) != 0;
+    const bool walkable = !ray && field<uint8_t>(body, kBodyWalkable) != 0;
+    if (!ground_release(field<float>(proxy, kProxyRise), field<float>(body, kBodyFall), walkable)) {
+        return false;
+    }
+    set_field<uint8_t>(proxy, kProxyGrounded, 0);
+    set_field<uint8_t>(proxy, kProxyProbe, 0);
+    set_field<uint8_t>(body, kBodyWalkable, 0);
+    set_field<int32_t>(body, kBodySupport, 0);
+    return true;
 }
 
 void* __fastcall hk_snap(void* self, float* out, const float* in) {
-    const float dt = g_frame_dt.load(std::memory_order_relaxed);
-    if (ground_snap_skip(self, in[1], dt, jump_in_progress(self))) {
+    const float in_y = in[1];
+    if (!g_snap_observe_only && snap_released(self)) {
         std::memcpy(out, in, 16);
-        ground_snap_record(self, in[1]);
+        jump_trace_snap(self, true, in_y, in_y);
         return out;
     }
     void* result = g_snap_orig(self, out, in);
-    ground_snap_record(self, static_cast<const float*>(result)[1]);
+    jump_trace_snap(self, false, in_y, static_cast<const float*>(result)[1]);
     return result;
+}
+
+// JumpTrace: the player's body before and after ChrPhysicalProxy::update. Offsets: proxy +0x08
+// character, +0x10 PXCharacterRigidBody, +0x60 desired velocity, +0xC4 grounded, +0xC5 probe;
+// character +0x90 final position, +0xB8 status, +0xC0 control flags; body +0x70 position, +0x1A0
+// fall velocity, +0x1B4 state, +0x120 support, +0x130 surface normal, +0x1C1 walkable contact,
+// +0x1D0 Havok character (+0x20 rigid body, whose +0x230 is the linear velocity).
+using ProxyUpdateFn = void(__fastcall*)(void* proxy, const float* step);
+InlineHook g_proxy_update;
+const void* g_player_vtable = nullptr;
+
+void __fastcall hk_proxy_update(void* proxy, const float* step) {
+    auto orig = reinterpret_cast<ProxyUpdateFn>(g_proxy_update.trampoline);
+    auto* chr = field<uint8_t*>(proxy, kProxyChr);
+    auto* body = field<uint8_t*>(proxy, kProxyBody);
+    if (!chr || !body || field<const void*>(chr, 0) != g_player_vtable) {
+        orig(proxy, step);
+        return;
+    }
+    JumpTraceSample s;
+    s.dt = g_frame_dt.load(std::memory_order_relaxed);
+    s.step0 = step[0];
+    s.step2 = step[2];
+    s.body_state = field<int32_t>(body, 0x1B4);
+    s.support = field<int32_t>(body, 0x120);
+    s.walkable = field<uint8_t>(body, 0x1C1);
+    s.normal_y = field<float>(body, 0x134);
+    s.fall_vy = field<float>(body, 0x1A4);
+    s.body_y = field<float>(body, 0x74);
+    if (auto* crb = field<uint8_t*>(body, 0x1D0)) {
+        if (auto* rb = field<uint8_t*>(crb, 0x20)) {
+            const float vx = field<float>(rb, 0x230);
+            const float vz = field<float>(rb, 0x238);
+            s.body_vy = field<float>(rb, 0x234);
+            s.body_vh = std::sqrt(vx * vx + vz * vz);
+        }
+    }
+    const float dvx = field<float>(proxy, 0x60);
+    const float dvz = field<float>(proxy, 0x68);
+    s.desired_vy = field<float>(proxy, 0x64);
+    s.desired_vh = std::sqrt(dvx * dvx + dvz * dvz);
+    jump_trace_begin(proxy);
+    orig(proxy, step);
+    s.probe = field<uint8_t>(proxy, 0xC5);
+    s.grounded = field<uint8_t>(proxy, 0xC4);
+    s.final_x = field<float>(chr, 0x90);
+    s.final_y = field<float>(chr, 0x94);
+    s.final_z = field<float>(chr, 0x98);
+    if (auto* status = field<uint8_t*>(chr, kChrStatus)) {
+        s.jump_count = field<int32_t>(status, kStatusJumpCount);
+        s.jump_type = field<int32_t>(status, 0xF0);
+        s.jump_vx = field<float>(status, 0x6A0);
+        s.jump_vy = field<float>(status, 0x6A4);
+        s.jump_vz = field<float>(status, 0x6A8);
+    }
+    if (auto* flags = field<uint8_t*>(chr, 0xC0)) {
+        s.flags25 = field<uint8_t>(flags, 0x25);
+        s.flags31 = field<uint8_t>(flags, 0x31);
+        s.flags32 = field<uint8_t>(flags, 0x32);
+        s.flags33 = field<uint8_t>(flags, 0x33);
+        s.flags34 = field<uint8_t>(flags, 0x34);
+    }
+    jump_trace_end(proxy, s);
+}
+
+// RTTI lookup of a class's primary vtable: the type descriptor holding the mangled name, the
+// complete-object locator (signature 1, offset 0) that refers to it by RVA, and the vtable slot
+// just after the pointer to that locator.
+const void* find_vtable(const char* mangled) {
+    auto* base = reinterpret_cast<uint8_t*>(GetModuleHandleW(nullptr));
+    auto* nt = reinterpret_cast<IMAGE_NT_HEADERS*>(base + reinterpret_cast<IMAGE_DOS_HEADER*>(base)->e_lfanew);
+    std::vector<Section> data;
+    auto* sec = IMAGE_FIRST_SECTION(nt);
+    for (WORD i = 0; i < nt->FileHeader.NumberOfSections; ++i, ++sec) {
+        if (!(sec->Characteristics & IMAGE_SCN_MEM_EXECUTE) && (sec->Characteristics & IMAGE_SCN_MEM_READ)) {
+            data.push_back({base + sec->VirtualAddress, sec->Misc.VirtualSize});
+        }
+    }
+    const size_t len = std::strlen(mangled) + 1;
+    uint32_t td_rva = 0;
+    for (const Section& s : data) {
+        for (size_t i = 0x10; i + len <= s.size && !td_rva; ++i) {
+            if (std::memcmp(s.start + i, mangled, len) == 0) {
+                td_rva = static_cast<uint32_t>(s.start + i - 0x10 - base);
+            }
+        }
+    }
+    if (!td_rva) {
+        return nullptr;
+    }
+    uint64_t col = 0;
+    for (const Section& s : data) {
+        for (size_t i = 0; i + 0x18 <= s.size && !col; i += 4) {
+            const uint8_t* p = s.start + i;
+            const uint32_t self_rva = static_cast<uint32_t>(p - base);
+            if (field<uint32_t>(p, 0) == 1 && field<uint32_t>(p, 4) == 0 && field<uint32_t>(p, 0xC) == td_rva &&
+                field<uint32_t>(p, 0x14) == self_rva) {
+                col = reinterpret_cast<uint64_t>(p);
+            }
+        }
+    }
+    if (!col) {
+        return nullptr;
+    }
+    for (const Section& s : data) {
+        for (size_t i = 0; i + 16 <= s.size; i += 8) {
+            if (field<uint64_t>(s.start + i, 0) == col) {
+                return s.start + i + 8;
+            }
+        }
+    }
+    return nullptr;
+}
+
+bool patch_jump_trace() {
+    constexpr const char* kName = "hk_ChrPhysicalProxy_JumpTrace";
+    g_player_vtable = find_vtable(".?AVPlayerCtrl@@");
+    if (!g_player_vtable) {
+        LOG_ERROR("%s: PlayerCtrl vtable not found", kName);
+        return false;
+    }
+    uint8_t* site = find_unique(kProxyUpdate, sizeof(kProxyUpdate), kName, kProxyUpdateMask);
+    if (!site || !g_proxy_update.install(site, reinterpret_cast<void*>(&hk_proxy_update), 5)) {
+        LOG_ERROR("%s: apply failed", kName);
+        return false;
+    }
+    LOG_INFO("%s: apply successful", kName);
+    return true;
 }
 
 bool patch_snap() {
@@ -601,8 +774,15 @@ void remove_ring_rate() {
 
 bool patches_apply(const Settings& settings) {
     if (!settings.fps_unlock) {
-        LOG_INFO("FPSUnlock is false; the game is left unchanged");
-        return true;
+        if (!jump_trace_enabled()) {
+            LOG_INFO("FPSUnlock is false; the game is left unchanged");
+            return true;
+        }
+        // Stock game with the trace: the snap is observed but never changed.
+        LOG_INFO("FPSUnlock is false; only the jump trace is installed");
+        g_snap_observe_only = true;
+        auto* exe = reinterpret_cast<uint8_t*>(GetModuleHandleW(nullptr));
+        return near_arena_init(exe + 0x1000) && patch_snap() && patch_jump_trace();
     }
 
     g_physics_fps = settings.physics_fps;
@@ -624,6 +804,9 @@ bool patches_apply(const Settings& settings) {
     ok &= hook_named(g_update_hook, "hk_KatanaMainApp_UpdateDT", kUpdateDt, sizeof(kUpdateDt), 5,
                      reinterpret_cast<void*>(&hk_update));
     ok &= settings.ground_snap_fix ? patch_snap() : patch_jump();
+    if (jump_trace_enabled()) {
+        ok &= patch_jump_trace();
+    }
     if (settings.forward_attack_fix) {
         ok &= hook_named(g_stick_history, "hk_ChrPadAttackInput_StickHistory", kStickHistory, sizeof(kStickHistory), 7,
                          reinterpret_cast<void*>(&hk_stick_history), kStickHistoryMask);
@@ -673,6 +856,7 @@ void patches_remove() {
     remove_ring_rate();
     unpatch_jump();
     unpatch_snap();
+    g_proxy_update.remove();
 }
 
 #endif  // _M_X64

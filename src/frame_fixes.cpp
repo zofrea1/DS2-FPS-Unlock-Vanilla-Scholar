@@ -2,7 +2,6 @@
 
 #include <atomic>
 #include <cstring>
-#include <limits>
 
 namespace {
 
@@ -11,43 +10,9 @@ constexpr float kRefFrame = 1.0f / kRefRate;
 
 double g_now = 0.0;
 
-// The last height of each character proxy's body. Entries not seen for a while are reused, so
-// characters that unload (and proxies that are freed and reallocated) start fresh.
-struct SnapTrack {
-    void* proxy = nullptr;
-    double seen = 0.0;
-    double jump_start = -1.0;
-    float y = 0.0f;
-};
-constexpr int kSnapTracks = 256;
-constexpr double kSnapStale = 1.0;
-// Longest continuous jump the snap is skipped for, in case a jump counter is ever left raised.
-constexpr double kSnapJumpLimit = 2.0;
-SnapTrack g_snap[kSnapTracks];
-
-SnapTrack* snap_track(void* proxy) {
-    SnapTrack* reuse = nullptr;
-    for (SnapTrack& t : g_snap) {
-        if (t.proxy == proxy) {
-            if (g_now - t.seen > kSnapStale) {
-                t.y = std::numeric_limits<float>::quiet_NaN();
-                t.jump_start = -1.0;
-            }
-            t.seen = g_now;
-            return &t;
-        }
-        if (!reuse && (!t.proxy || g_now - t.seen > kSnapStale)) {
-            reuse = &t;
-        }
-    }
-    if (reuse) {
-        reuse->proxy = proxy;
-        reuse->seen = g_now;
-        reuse->y = std::numeric_limits<float>::quiet_NaN();
-        reuse->jump_start = -1.0;
-    }
-    return reuse;
-}
+// Commanded upward speed at which one 60 FPS step leaves Havok's contact band. Between the
+// wind-up speed that stays held (1.46) and the takeoff speeds that are always released (3.45+).
+constexpr float kReleaseSpeed = 2.4f;
 
 uint32_t bits(float f) {
     uint32_t u = 0;
@@ -63,33 +28,8 @@ void frame_clock_advance(float dt) {
     }
 }
 
-bool ground_snap_skip(void* proxy, float in_y, float dt, bool jumping) {
-    SnapTrack* t = snap_track(proxy);
-    if (!t) {
-        return jumping;
-    }
-    if (jumping) {
-        if (t->jump_start < 0.0) {
-            t->jump_start = g_now;
-        }
-        if (g_now - t->jump_start < kSnapJumpLimit) {
-            return true;
-        }
-    } else {
-        t->jump_start = -1.0;
-    }
-    if (t->y != t->y) {
-        return false;
-    }
-    // Above 0.4 units per second of climb, and not a teleport.
-    const float rise = in_y - t->y;
-    return rise > 0.4f * dt && rise < 2.0f;
-}
-
-void ground_snap_record(void* proxy, float y) {
-    if (SnapTrack* t = snap_track(proxy)) {
-        t->y = y;
-    }
+bool ground_release(float rise, float fall, bool walkable) {
+    return walkable && rise > 0.0f && rise + fall >= kReleaseSpeed;
 }
 
 void stick_history_before(const float* history, StickHistorySave& save) {
