@@ -41,7 +41,7 @@ Three per-frame rules are made to behave as they do at 60 FPS, the rate the PC g
 - **Guard break and jump attack** (`ForwardAttackFix`). Forward + R1 and forward + R2 need the stick pushed forward from neutral within a short time. The game looks for that in a history of the last 16 frames: 0.27 s at 60 FPS, but 0.13 s at 120 and 0.07 s at 240, so a normal push fell out of the history. Frames are now folded together so the history spans what it does at 60 FPS.
 - **Animation events** (`TaeEventFix`). The game dispatches the animation (TAE) events of the current 1/30 s TAE frame on every update. A track that has two events running at once marks both as starting on every dispatch, so their start effects (damage, effects, spawned objects) happened once per TAE frame at 30 FPS, twice at 60, and about five times at 144. Those repeats are now limited to what 60 FPS gives. The events themselves still run every frame.
 
-Anything else that runs once per call, instead of once per second of animation, can still speed up. Cloth speed is corrected; the cloth simulation itself is still not identical to 60 FPS. Online play uses the measured step as well. That is not a promise that it matches a peer running at 60.
+Anything else that runs once per call, instead of once per second of animation, can still speed up. Cloth speed is corrected; the cloth simulation itself is still not identical to 60 FPS. Online play uses the measured step as well. That is not a promise that it matches a peer running at 60. Compatibility against other online players playing at 60 FPS seems good, but I am not a consistent DS2 PvP player and am not the best judge as to whether compatibility or fairness are perfect or merely acceptable.
 
 ## Build
 
