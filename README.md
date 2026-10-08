@@ -1,3 +1,5 @@
+## If my mod brought you some happiness, and you have the means, you're welcome to donate at [buymeacoffee.com/zofrea](https://buymeacoffee.com/zofrea). Thank you and enjoy the mod!
+
 # DS2-FPS-Unlock-Vanilla-Scholar
 
 High-FPS unlock with gameplay physics fixes for both editions of Dark Souls II: the original game (Vanilla, 32-bit DirectX 9) and Scholar of the First Sin (64-bit DirectX 11). Jumps, attack inputs, animation events, cloth and equipment durability are kept in step with how the game plays at 60 FPS. One source tree builds both editions.
