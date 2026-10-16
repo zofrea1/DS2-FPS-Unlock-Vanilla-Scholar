@@ -1,5 +1,6 @@
 #include "patches.h"
 
+#include "aspect.h"
 #include "frame_fixes.h"
 #include "inline_hook.h"
 #include "jump_trace.h"
@@ -195,6 +196,25 @@ const uint8_t kAspectResizeFull[] = {
     0x33, 0xC9,  // xor ecx, ecx
     0x33, 0xC0,  // xor eax, eax
     0xEB, 0x48}; // jmp to the stores
+// Every perspective matrix is built by one function: rcx out, xmm1 vertical field of view, xmm2 aspect,
+// xmm3 near, far on the stack. The cameras pass width/height of the game area as the aspect (or an
+// override), the camera operators the same ratio from the screen getters. Shadow and cube cameras use 1.
+// Prologue: push rbx; sub rsp, 80h; then the xmm saves.
+const uint8_t kPerspective[] = {
+    0x40, 0x53, 0x48, 0x81, 0xEC, 0x80, 0x00, 0x00, 0x00, 0x0F, 0x29, 0x74, 0x24, 0x70, 0x0F, 0x29,
+    0x7C, 0x24, 0x60, 0x44, 0x0F, 0x29, 0x44, 0x24, 0x50, 0x48, 0x8B, 0xD9, 0x44, 0x0F, 0x29, 0x4C,
+    0x24, 0x40, 0x0F, 0x28, 0xF9, 0x44, 0x0F, 0x29, 0x54, 0x24, 0x30};
+// Camera setup: "mov [rcx+64h], edi; movss [rcx+58h], xmm0; mov rax, [KatanaMainApp]; mov rcx, [rax+40h];
+// call <screen width>; mov [rbx+5Ch], eax". The screen object at app +0x40 holds the game area size at +8/+0xC.
+const uint8_t kMainAppRef[] = {
+    0x89, 0x79, 0x64, 0xF3, 0x0F, 0x11, 0x41, 0x58, 0x48, 0x8B, 0x05, 0x00, 0x00, 0x00, 0x00, 0x48,
+    0x8B, 0x48, 0x40, 0xE8, 0x00, 0x00, 0x00, 0x00, 0x89, 0x43, 0x5C};
+const char kMainAppRefMask[] = "xxxxxxxxxxx????xxxxx????xxx";
+static_assert(sizeof(kMainAppRefMask) == sizeof(kMainAppRef) + 1, "main app mask length");
+constexpr size_t kMainAppRefMov = 8;
+constexpr size_t kAppScreen = 0x40;
+constexpr size_t kScreenWidth = 0x8;
+constexpr size_t kScreenHeight = 0xC;
 
 InlineHook g_frame_hook;
 InlineHook g_update_hook;
@@ -507,11 +527,65 @@ void restore_code(CodePatch& patch) {
     patch.site = nullptr;
 }
 
+// Vert+: a perspective whose aspect is the game area's (a screen camera) and taller than 16:9 gets the field
+// of view that keeps the 16:9 horizontal view. Shadow, cube and render-to-texture cameras have other aspects.
+using PerspectiveFn = float*(__fastcall*)(float* out, float fovy, float aspect, float zn, float zf);
+InlineHook g_perspective;
+uint8_t* const* g_main_app = nullptr;
+
+float screen_aspect() {
+    const uint8_t* app = g_main_app ? *g_main_app : nullptr;
+    const uint8_t* screen = nullptr;
+    if (app) {
+        std::memcpy(&screen, app + kAppScreen, sizeof(screen));
+    }
+    if (!screen) {
+        return 0.0f;
+    }
+    uint32_t w = 0;
+    uint32_t h = 0;
+    std::memcpy(&w, screen + kScreenWidth, sizeof(w));
+    std::memcpy(&h, screen + kScreenHeight, sizeof(h));
+    return h ? static_cast<float>(w) / static_cast<float>(h) : 0.0f;
+}
+
+float* __fastcall hk_perspective(float* out, float fovy, float aspect, float zn, float zf) {
+    const float screen = screen_aspect();
+    if (screen > 0.0f && std::fabs(aspect - screen) < 0.01f) {
+        const float wider = aspect_vert_plus(fovy, aspect);
+        static bool logged = false;
+        if (wider != fovy && !logged) {
+            logged = true;
+            LOG_INFO("FixAspect: game area aspect %.3f; vertical view %.1f -> %.1f deg, 16:9 horizontal view kept",
+                     aspect, fovy * 57.29578f, wider * 57.29578f);
+        }
+        fovy = wider;
+    }
+    return reinterpret_cast<PerspectiveFn>(g_perspective.trampoline)(out, fovy, aspect, zn, zf);
+}
+
+bool patch_vert_plus() {
+    constexpr const char* kName = "hk_Perspective_VertPlus";
+    auto* exe = reinterpret_cast<uint8_t*>(GetModuleHandleW(nullptr));
+    uint8_t* ref = find_unique(kMainAppRef, sizeof(kMainAppRef), kName, kMainAppRefMask);
+    if (!ref || !near_arena_init(exe + 0x1000)) {
+        LOG_ERROR("%s: apply failed", kName);
+        return false;
+    }
+    uint8_t* mov = ref + kMainAppRefMov;  // mov rax, [rip+disp32]
+    int32_t disp = 0;
+    std::memcpy(&disp, mov + 3, sizeof(disp));
+    g_main_app = reinterpret_cast<uint8_t* const*>(mov + 7 + disp);
+    return hook_named(g_perspective, kName, kPerspective, sizeof(kPerspective), 9,
+                      reinterpret_cast<void*>(&hk_perspective));
+}
+
 bool patch_aspect() {
     bool ok = write_code(g_aspect_setup, kAspectSetup, sizeof(kAspectSetup), kAspectSetupMask, kAspectSetupAt,
                          kAspectSetupFull, sizeof(kAspectSetupFull), "pch_Screen_FullscreenAspect_Setup");
     ok &= write_code(g_aspect_resize, kAspectResize, sizeof(kAspectResize), kAspectResizeMask, kAspectResizeAt,
                      kAspectResizeFull, sizeof(kAspectResizeFull), "pch_Screen_FullscreenAspect_Resize");
+    ok &= patch_vert_plus();
     return ok;
 }
 
@@ -948,6 +1022,7 @@ bool patches_apply(const Settings& settings) {
 void patches_remove() {
     restore_code(g_aspect_setup);
     restore_code(g_aspect_resize);
+    g_perspective.remove();
     g_frame_hook.remove();
     g_update_hook.remove();
     g_world_hook.remove();
