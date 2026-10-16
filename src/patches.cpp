@@ -151,6 +151,51 @@ const uint8_t kDurRingRate[] = {
     0x66, 0x41, 0x0F, 0x6E, 0xCC, 0xF3, 0x0F, 0x11, 0x44, 0x24, 0x2C, 0x0F, 0x5B, 0xC9, 0xF3, 0x0F,
     0x58, 0xCE};
 
+// Fullscreen 16:9 fit (FixAspect). The screen object (+0x18 windowed flag) renders a window at its full client
+// size, but in exclusive fullscreen it sizes the game area to the largest centred 16:9 rectangle (width +0xD0C,
+// height +0xD10, top +0xD14, left +0xD18), renders at that size and copies it into the swap chain between black
+// bars. The rectangle is computed in two places, screen setup and resize; both are given the whole backbuffer, so
+// fullscreen draws as a window of the same size does: cameras take their aspect from the game area and the HUD
+// keeps its 1280x720 layout, scaled uniformly and anchored to the screen edges.
+// Setup, from "cmp [rbx+18h], r13b; jne" through the first store. rbx is the screen, [rbx+8]/[rbx+0Ch] the
+// backbuffer size. The two masked dwords are the rip-relative 9.0 and 1/16.
+const uint8_t kAspectSetup[] = {
+    0x44, 0x38, 0x6B, 0x18, 0x75, 0x75, 0x8B, 0x4B, 0x0C, 0x44, 0x8B, 0x43, 0x08, 0x0F, 0x57, 0xC0, 0x0F, 0x57,
+    0xC9, 0xF3, 0x48, 0x0F, 0x2A, 0xC1, 0xF3, 0x49, 0x0F, 0x2A, 0xC8, 0xF3, 0x0F, 0x5E, 0x05, 0x00, 0x00, 0x00,
+    0x00, 0xF3, 0x0F, 0x59, 0x0D, 0x00, 0x00, 0x00, 0x00, 0x0F, 0x2F, 0xC1, 0x76, 0x15, 0x47, 0x8D, 0x0C, 0xC0,
+    0x41, 0x8B, 0xD0, 0x45, 0x8B, 0xC5, 0x41, 0xC1, 0xE9, 0x04, 0x41, 0x2B, 0xC9, 0xD1, 0xE9, 0xEB, 0x18, 0x44,
+    0x8B, 0xC9, 0xC1, 0xE1, 0x04, 0xB8, 0x39, 0x8E, 0xE3, 0x38, 0xF7, 0xE1, 0xD1, 0xEA, 0x41, 0x8B, 0xCD, 0x44,
+    0x2B, 0xC2, 0x41, 0xD1, 0xE8, 0x89, 0x93, 0x0C, 0x0D, 0x00, 0x00};
+const char kAspectSetupMask[] =
+    "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx????xxxx????xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+static_assert(sizeof(kAspectSetupMask) == sizeof(kAspectSetup) + 1, "aspect setup mask length");
+// Replaces the fit after the jne. The stores that follow take edx width, r9d height, ecx top, r8d left.
+constexpr size_t kAspectSetupAt = 6;
+const uint8_t kAspectSetupFull[] = {
+    0x8B, 0x53, 0x08,        // mov edx, [rbx+8]
+    0x44, 0x8B, 0x4B, 0x0C,  // mov r9d, [rbx+0Ch]
+    0x33, 0xC9,              // xor ecx, ecx
+    0x45, 0x33, 0xC0,        // xor r8d, r8d
+    0xEB, 0x4B};             // jmp to the stores
+// Resize, from "cmp byte [rbx+18h], 0; mov edx, edi; mov r8d, esi; jne" through the first store. edi/esi are the
+// new backbuffer width and height; the size stored at +8/+0Ch afterwards (and rendered at) is edx by r8d.
+const uint8_t kAspectResize[] = {
+    0x80, 0x7B, 0x18, 0x00, 0x8B, 0xD7, 0x44, 0x8B, 0xC6, 0x75, 0x69, 0x0F, 0x57, 0xC0, 0x0F, 0x57, 0xC9, 0x8B,
+    0xCE, 0xF3, 0x48, 0x0F, 0x2A, 0xC6, 0xF3, 0x48, 0x0F, 0x2A, 0xCF, 0xF3, 0x0F, 0x5E, 0x05, 0x00, 0x00, 0x00,
+    0x00, 0xF3, 0x0F, 0x59, 0x0D, 0x00, 0x00, 0x00, 0x00, 0x0F, 0x2F, 0xC1, 0x76, 0x11, 0x44, 0x8D, 0x04, 0xFF,
+    0x41, 0xC1, 0xE8, 0x04, 0x41, 0x2B, 0xC8, 0xD1, 0xE9, 0x33, 0xC0, 0xEB, 0x16, 0xC1, 0xE1, 0x04, 0xB8, 0x39,
+    0x8E, 0xE3, 0x38, 0xF7, 0xE1, 0x33, 0xC0, 0x8B, 0xC8, 0xD1, 0xEA, 0x8B, 0xC7, 0x2B, 0xC2, 0xD1, 0xE8, 0x89,
+    0x93, 0x0C, 0x0D, 0x00, 0x00};
+const char kAspectResizeMask[] =
+    "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx????xxxx????xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+static_assert(sizeof(kAspectResizeMask) == sizeof(kAspectResize) + 1, "aspect resize mask length");
+// Replaces the fit after the jne, keeping edx/r8d. The stores take ecx top, eax left.
+constexpr size_t kAspectResizeAt = 11;
+const uint8_t kAspectResizeFull[] = {
+    0x33, 0xC9,  // xor ecx, ecx
+    0x33, 0xC0,  // xor eax, eax
+    0xEB, 0x48}; // jmp to the stores
+
 InlineHook g_frame_hook;
 InlineHook g_update_hook;
 InlineHook g_world_hook;
@@ -414,6 +459,60 @@ bool hook_named(InlineHook& hook, const char* name, const uint8_t* pat, size_t p
     }
     LOG_INFO("%s: apply successful", name);
     return true;
+}
+
+// Bytes overwritten in place, kept for patches_remove.
+struct CodePatch {
+    uint8_t* site = nullptr;
+    uint8_t original[16]{};
+    size_t n = 0;
+};
+
+CodePatch g_aspect_setup;
+CodePatch g_aspect_resize;
+
+bool write_code(CodePatch& patch, const uint8_t* pat, size_t pat_len, const char* mask, size_t at,
+                const uint8_t* bytes, size_t n, const char* name) {
+    uint8_t* hit = find_unique(pat, pat_len, name, mask);
+    if (!hit || n > sizeof(patch.original)) {
+        LOG_ERROR("%s: apply failed", name);
+        return false;
+    }
+    uint8_t* site = hit + at;
+    DWORD old = 0;
+    if (!VirtualProtect(site, n, PAGE_EXECUTE_READWRITE, &old)) {
+        LOG_ERROR("%s: VirtualProtect failed (%lu)", name, GetLastError());
+        return false;
+    }
+    std::memcpy(patch.original, site, n);
+    std::memcpy(site, bytes, n);
+    VirtualProtect(site, n, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), site, n);
+    patch.site = site;
+    patch.n = n;
+    LOG_INFO("%s: apply successful", name);
+    return true;
+}
+
+void restore_code(CodePatch& patch) {
+    if (!patch.site) {
+        return;
+    }
+    DWORD old = 0;
+    if (VirtualProtect(patch.site, patch.n, PAGE_EXECUTE_READWRITE, &old)) {
+        std::memcpy(patch.site, patch.original, patch.n);
+        VirtualProtect(patch.site, patch.n, old, &old);
+        FlushInstructionCache(GetCurrentProcess(), patch.site, patch.n);
+    }
+    patch.site = nullptr;
+}
+
+bool patch_aspect() {
+    bool ok = write_code(g_aspect_setup, kAspectSetup, sizeof(kAspectSetup), kAspectSetupMask, kAspectSetupAt,
+                         kAspectSetupFull, sizeof(kAspectSetupFull), "pch_Screen_FullscreenAspect_Setup");
+    ok &= write_code(g_aspect_resize, kAspectResize, sizeof(kAspectResize), kAspectResizeMask, kAspectResizeAt,
+                     kAspectResizeFull, sizeof(kAspectResizeFull), "pch_Screen_FullscreenAspect_Resize");
+    return ok;
 }
 
 // Set when the fixes are off and the snap hook only reports to the jump trace.
@@ -773,16 +872,21 @@ void remove_ring_rate() {
 }  // namespace
 
 bool patches_apply(const Settings& settings) {
+    // A display fix, independent of the framerate unlock.
+    bool ok = true;
+    if (settings.fix_aspect) {
+        ok &= patch_aspect();
+    }
     if (!settings.fps_unlock) {
         if (!jump_trace_enabled()) {
-            LOG_INFO("FPSUnlock is false; the game is left unchanged");
-            return true;
+            LOG_INFO("FPSUnlock is false; the framerate and gameplay are left unchanged");
+            return ok;
         }
         // Stock game with the trace: the snap is observed but never changed.
         LOG_INFO("FPSUnlock is false; only the jump trace is installed");
         g_snap_observe_only = true;
         auto* exe = reinterpret_cast<uint8_t*>(GetModuleHandleW(nullptr));
-        return near_arena_init(exe + 0x1000) && patch_snap() && patch_jump_trace();
+        return ok && near_arena_init(exe + 0x1000) && patch_snap() && patch_jump_trace();
     }
 
     g_physics_fps = settings.physics_fps;
@@ -798,7 +902,6 @@ bool patches_apply(const Settings& settings) {
         return false;
     }
 
-    bool ok = true;
     ok &= hook_named(g_frame_hook, "hk_MainAppFrameTimeInfo_UnlockDeltatime", kFrameTime, sizeof(kFrameTime), 5,
                      reinterpret_cast<void*>(&hk_frame_time));
     ok &= hook_named(g_update_hook, "hk_KatanaMainApp_UpdateDT", kUpdateDt, sizeof(kUpdateDt), 5,
@@ -843,6 +946,8 @@ bool patches_apply(const Settings& settings) {
 }
 
 void patches_remove() {
+    restore_code(g_aspect_setup);
+    restore_code(g_aspect_resize);
     g_frame_hook.remove();
     g_update_hook.remove();
     g_world_hook.remove();

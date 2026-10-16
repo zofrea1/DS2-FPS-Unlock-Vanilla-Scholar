@@ -239,6 +239,30 @@ constexpr size_t kTaeHandlerCallAt = 0xE1;
 constexpr size_t kTaeHandlerCallLen = 8;
 constexpr size_t kTaeTrackLastEvent = 0x8;
 constexpr size_t kTaeEventStart = 0x1E;
+// Fullscreen 16:9 fit (FixAspect). The screen object (+0x14 windowed flag) renders a window at its full client
+// size, but in exclusive fullscreen it renders at the largest centred 16:9 rectangle of the backbuffer (width
+// +0xBA8, height +0xBAC, top +0xBB0, left +0xBB4) and copies that into the swap chain between black bars. Screen
+// setup and the switch to fullscreen both get the rectangle from this helper: cdecl (width, height, top, left out;
+// backbuffer width, height in). It is replaced by full_fit, so fullscreen draws as a window of the same size does:
+// cameras take their aspect from the game area and the HUD keeps its 1280x720 layout, scaled uniformly and
+// anchored to the screen edges. The masked dwords are relocated addresses of 1/16, 9.0 and 2^32.
+const uint8_t kAspectFit[] = {
+    0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x08, 0x8B, 0x4D, 0x18, 0x8B, 0xC1, 0x56, 0x89, 0x45, 0x18, 0xDB,
+    0x45, 0x18, 0x57, 0x85, 0xC0, 0x79, 0x06, 0xD8, 0x05, 0x00, 0x00, 0x00, 0x00, 0x8B, 0x55, 0x1C,
+    0xDC, 0x0D, 0x00, 0x00, 0x00, 0x00, 0x8B, 0xC2, 0x89, 0x45, 0x18, 0xDB, 0x45, 0x18, 0x85, 0xC0,
+    0x79, 0x06, 0xD8, 0x05, 0x00, 0x00, 0x00, 0x00, 0xDD, 0x05, 0x00, 0x00, 0x00, 0x00, 0xDC, 0xF9,
+    0xD9, 0xCA, 0xD9, 0x55, 0x18, 0xD9, 0x45, 0x18, 0xD9, 0xCA, 0xD9, 0x55, 0x18, 0xD9, 0x45, 0x18,
+    0xDF, 0xF3, 0xDD, 0xDA, 0x76, 0x29, 0xD9, 0x7D};
+const char kAspectFitMask[] =
+    "xxxxxxxxxxxxxxxxxxxxxxxxx????xxxxx????xxxxxxxxxxxxxx????xx????xxxxxxxxxxxxxxxxxxxxxxxxxx";
+static_assert(sizeof(kAspectFitMask) == sizeof(kAspectFit) + 1, "aspect fit mask length");
+
+void __cdecl full_fit(int* width, int* height, int* top, int* left, int backbuffer_w, int backbuffer_h) {
+    *width = backbuffer_w;
+    *height = backbuffer_h;
+    *top = 0;
+    *left = 0;
+}
 
 InlineHook g_sampler;
 InlineHook g_pacer;
@@ -263,6 +287,7 @@ BytePatch g_measured;
 BytePatch g_clamp;
 BytePatch g_jump;
 SpanPatch g_cloth;
+SpanPatch g_aspect_fit;
 
 struct Section {
     uint8_t* start;
@@ -376,9 +401,7 @@ void restore_byte(BytePatch& patch) {
     patch.site = nullptr;
 }
 
-bool patch_span(SpanPatch& patch, const uint8_t* pat, size_t n, const char* mask, const uint8_t* replacement,
-                size_t replace_n, const char* name) {
-    uint8_t* site = find_unique(pat, n, name, mask);
+bool write_span(SpanPatch& patch, uint8_t* site, const uint8_t* replacement, size_t replace_n, const char* name) {
     if (!site || replace_n > sizeof(patch.original)) {
         LOG_ERROR("%s: apply failed", name);
         return false;
@@ -396,6 +419,25 @@ bool patch_span(SpanPatch& patch, const uint8_t* pat, size_t n, const char* mask
     patch.n = replace_n;
     LOG_INFO("%s: apply successful", name);
     return true;
+}
+
+bool patch_span(SpanPatch& patch, const uint8_t* pat, size_t n, const char* mask, const uint8_t* replacement,
+                size_t replace_n, const char* name) {
+    return write_span(patch, find_unique(pat, n, name, mask), replacement, replace_n, name);
+}
+
+// jmp full_fit over the start of the fit helper. Nothing returns into the rest of it.
+bool patch_aspect() {
+    constexpr const char* kName = "pch_Screen_FullscreenAspect";
+    uint8_t* site = find_unique(kAspectFit, sizeof(kAspectFit), kName, kAspectFitMask);
+    if (!site) {
+        LOG_ERROR("%s: apply failed", kName);
+        return false;
+    }
+    uint8_t jmp[5] = {0xE9};
+    const int32_t rel = static_cast<int32_t>(reinterpret_cast<intptr_t>(&full_fit) - reinterpret_cast<intptr_t>(site + 5));
+    std::memcpy(jmp + 1, &rel, sizeof(rel));
+    return write_span(g_aspect_fit, site, jmp, sizeof(jmp), kName);
 }
 
 void restore_span(SpanPatch& patch) {
@@ -726,10 +768,15 @@ void unpatch_tae() {
 }  // namespace
 
 bool patches_apply(const Settings& settings) {
+    // A display fix, independent of the framerate unlock.
+    bool ok = true;
+    if (settings.fix_aspect) {
+        ok &= patch_aspect();
+    }
     if (!settings.fps_unlock) {
         if (!jump_trace_enabled()) {
-            LOG_INFO("FPSUnlock is false; the game is left unchanged");
-            return true;
+            LOG_INFO("FPSUnlock is false; the framerate and gameplay are left unchanged");
+            return ok;
         }
         // Stock game with the trace: the snap is observed but never changed, and the game keeps its own
         // 60 FPS pacing. The device fix stays, since without it the stock game crashes while creating
@@ -737,7 +784,7 @@ bool patches_apply(const Settings& settings) {
         LOG_INFO("FPSUnlock is false; only the jump trace and the device fix are installed");
         g_snap_observe_only = true;
         auto* exe = reinterpret_cast<uint8_t*>(GetModuleHandleW(nullptr));
-        return near_arena_init(exe + 0x1000) && present_apply() && patch_snap() && patch_jump_trace();
+        return ok && near_arena_init(exe + 0x1000) && present_apply() && patch_snap() && patch_jump_trace();
     }
 
     const DWORD stamp = exe_timestamp();
@@ -752,7 +799,6 @@ bool patches_apply(const Settings& settings) {
         return false;
     }
 
-    bool ok = true;
     ok &= hook_named(g_sampler, &g_sampler_tramp, "hk_MainAppFrameTimeInfo_UnlockDeltatime", kSampler,
                      sizeof(kSampler), 6, reinterpret_cast<void*>(&hk_sampler));
     ok &= hook_named(g_pacer, nullptr, "hk_FramePacer_Disable", kPacer, sizeof(kPacer), 6,
@@ -814,4 +860,5 @@ void patches_remove() {
     unpatch_snap();
     g_proxy_update.remove();
     restore_span(g_cloth);
+    restore_span(g_aspect_fit);
 }

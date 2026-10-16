@@ -85,6 +85,8 @@ Settings settings_load(const wchar_t* dll_path) {
             s.durability_fix = parse_bool(val);
         } else if (key == "jumptrace") {
             s.jump_trace = parse_bool(val);
+        } else if (key == "fixaspect") {
+            s.fix_aspect = parse_bool(val);
         } else if (key == "physicsfps") {
             s.physics_fps = std::atoi(val.c_str());
         }

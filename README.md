@@ -2,16 +2,16 @@
 
 # DS2-FPS-Unlock-Vanilla-Scholar
 
-High-FPS unlock with gameplay physics fixes for both editions of Dark Souls II: the original game (Vanilla, 32-bit DirectX 9) and Scholar of the First Sin (64-bit DirectX 11). Jumps, attack inputs, animation events, cloth and equipment durability are kept in step with how the game plays at 60 FPS. One source tree builds both editions.
+High-FPS unlock with gameplay physics fixes for both editions of Dark Souls II: the original game (Vanilla, 32-bit DirectX 9) and Scholar of the First Sin (64-bit DirectX 11). Jumps, attack inputs, animation events, cloth and equipment durability are kept in step with how the game plays at 60 FPS. Fullscreen also fills 16:10 screens such as the Steam Deck's, without black bars. One source tree builds both editions.
 
 The mod removes the game's own limiter. It does not install a new one. Cap the framerate with RTSS, the NVIDIA control panel, or another limiter, and set `PhysicsFPS` to that same number (default 120).
 
 | Game | Download | DLL to install |
 | --- | --- | --- |
-| Scholar of the First Sin (64-bit, DirectX 11) | release `v1.1.0-SCHOLAR-DX11` | `xinput1_3.dll` from that archive |
-| Original Dark Souls II, Vanilla (32-bit, DirectX 9) | release `v1.1.0-VANILLA-DX9` | `xinput1_3.dll` from that archive |
+| Scholar of the First Sin (64-bit, DirectX 11) | release `v1.2.0-SCHOLAR-DX11` | `xinput1_3.dll` from that archive |
+| Original Dark Souls II, Vanilla (32-bit, DirectX 9) | release `v1.2.0-VANILLA-DX9` | `xinput1_3.dll` from that archive |
 
-The game imports `XINPUT1_3.dll` by ordinal. The file has to keep that name, next to `DarkSoulsII.exe`, along with `DS2-FPS-Unlock.ini`. Controller calls are forwarded to the system DLL. The executable on disk is not modified.
+The game imports `XINPUT1_3.dll` by ordinal. The file has to keep that name, next to `DarkSoulsII.exe`, along with `DS2-FPS-Unlock.ini`. Controller calls are forwarded to the system's XInput (`xinput1_4`, the Windows 8 and later library). The executable on disk is not modified.
 
 The two games cannot share a DLL.
 
@@ -23,9 +23,19 @@ The original game's unlocked picture is fullscreen only. In windowed mode the co
 
 The Scholar build was tested with the Dark Souls II Seamless Co-op mod, and both were working together.
 
+## 16:10 screens and the Steam Deck
+
+In exclusive fullscreen both editions draw the game in the largest 16:9 rectangle of the screen and copy it into the middle of the display, so a 16:10 screen (the Steam Deck's 1280x800, 1920x1200, 2560x1600) gets black bars at the top and bottom. In a window the same game renders at the window's full size: the cameras take their aspect from it and the HUD keeps its 1280x720 layout, scaled to fit and anchored to the screen edges. That is why widescreen tools only worked in windowed mode.
+
+`FixAspect = true` (the default) makes fullscreen behave like the window: the game area is the whole backbuffer at any aspect ratio. The vertical view is the game's own, so a 16:10 screen shows the same height of the scene as 16:9 with slightly less at the sides, exactly as a 16:10 window always has. A 16:9 screen is unchanged. Wider screens (21:9) also fill, with the HUD at the edges; that has not been checked in game. `FixAspect` works whether or not `FPSUnlock` is on.
+
+Fullscreen lists every resolution the display offers. Pick the display's own resolution (1280x800 on the Deck) in the game's options; a 16:9 resolution on a 16:10 display is still letterboxed by the display or by the Deck's scaler. Windowed mode only offers 16:9 sizes. The log names the display's resolution at start-up.
+
+Steam Deck (Proton): set the game's launch options to `WINEDLLOVERRIDES="xinput1_3=n,b" %command%` so Wine loads this DLL instead of its own `xinput1_3`. Controller input is forwarded to Wine's `xinput1_4`; forwarding to `xinput1_3` would reach this DLL again.
+
 ## Configuration
 
-`FPSUnlock = false` leaves the game completely unchanged.
+`FPSUnlock = false` leaves the framerate and gameplay unchanged. `FixAspect` (above) is separate.
 
 `FPSUnlock = true` turns the whole fix on. The individual fixes have their own switches, all `true` by default: `GroundSnapFix`, `ForwardAttackFix` and `TaeEventFix` (described below), `ClothFix` (cloth stepped with the real frame time) and `DurabilityFix` (durability loss scaled to the frame time). `GroundSnapFix = false` falls back to the old jump workaround that never snaps. The original mod's names `JumpHeightFix` and `ClothSpeedFix` are also accepted.
 

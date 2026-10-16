@@ -1,7 +1,6 @@
 #include "jump_trace.h"
 #include "log.h"
 #include "patches.h"
-#include "proxy.h"
 #include "settings.h"
 
 #define WIN32_LEAN_AND_MEAN
@@ -9,7 +8,27 @@
 
 #include <cwchar>
 
+#pragma comment(lib, "user32.lib")
+
 namespace {
+
+// The desktop mode of the primary display, for the FixAspect log line. The game lists every fullscreen
+// mode the display offers, so the player picks the matching one in its options.
+void log_display_mode() {
+    DEVMODEW mode{};
+    mode.dmSize = sizeof(mode);
+    if (!EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &mode) || mode.dmPelsHeight == 0) {
+        return;
+    }
+    const float aspect = static_cast<float>(mode.dmPelsWidth) / static_cast<float>(mode.dmPelsHeight);
+    const float wide = 16.0f / 9.0f;
+    if (aspect > wide - 0.01f && aspect < wide + 0.01f) {
+        LOG_INFO("   Display %lux%lu is 16:9", mode.dmPelsWidth, mode.dmPelsHeight);
+    } else {
+        LOG_INFO("   Display %lux%lu (%.3f): choose %lux%lu as the game's fullscreen resolution to fill it",
+                 mode.dmPelsWidth, mode.dmPelsHeight, aspect, mode.dmPelsWidth, mode.dmPelsHeight);
+    }
+}
 
 bool filename_is_game(const wchar_t* path) {
     const wchar_t* slash = wcsrchr(path, L'\\');
@@ -21,7 +40,7 @@ void startup(HMODULE self) {
     wchar_t dll_path[MAX_PATH];
     GetModuleFileNameW(self, dll_path, MAX_PATH);
     log_init(dll_path);
-    LOG_INFO("DS2-FPS-Unlock v1.1.0");
+    LOG_INFO("DS2-FPS-Unlock v1.2.0");
 
     wchar_t exe_path[MAX_PATH];
     GetModuleFileNameW(nullptr, exe_path, MAX_PATH);
@@ -53,14 +72,15 @@ void startup(HMODULE self) {
     LOG_INFO(" - TaeEventFix: %s", settings.tae_event_fix ? "true" : "false");
     LOG_INFO(" - ClothFix: %s", settings.cloth_fix ? "true" : "false");
     LOG_INFO(" - DurabilityFix: %s", settings.durability_fix ? "true" : "false");
+    LOG_INFO(" - FixAspect: %s", settings.fix_aspect ? "true" : "false");
+    if (settings.fix_aspect) {
+        log_display_mode();
+    }
     if (settings.jump_trace) {
         const bool open = jump_trace_open(dll_path, settings.fps_unlock ? L"unlocked" : L"stock");
         LOG_INFO(" - JumpTrace: %s", open ? "writing DS2-FPS-Unlock-jumptrace-*.csv" : "could not open the CSV");
     }
 
-    if (!proxy_init()) {
-        LOG_ERROR("XInput proxy failed; controller input will not work");
-    }
     if (!patches_apply(settings)) {
         LOG_ERROR("One or more patches failed. The game may be an unexpected build.");
     }

@@ -16,6 +16,9 @@ struct Settings {
     bool durability_fix = true;
     // Diagnostic: write the player's per-frame jump physics to DS2-FPS-Unlock-jumptrace-*.csv.
     bool jump_trace = false;
+    // Fill the screen in exclusive fullscreen at any aspect ratio instead of a 16:9 picture between black bars.
+    // Independent of fps_unlock.
+    bool fix_aspect = true;
 };
 
 // Reads DS2-FPS-Unlock.ini from the same directory as the DLL.
