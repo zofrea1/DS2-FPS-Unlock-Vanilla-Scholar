@@ -1,5 +1,6 @@
 #include "patches.h"
 
+#include "aspect.h"
 #include "frame_fixes.h"
 #include "inline_hook.h"
 #include "jump_trace.h"
@@ -256,6 +257,58 @@ const uint8_t kAspectFit[] = {
 const char kAspectFitMask[] =
     "xxxxxxxxxxxxxxxxxxxxxxxxx????xxxxx????xxxxxxxxxxxxxx????xx????xxxxxxxxxxxxxxxxxxxxxxxxxx";
 static_assert(sizeof(kAspectFitMask) == sizeof(kAspectFit) + 1, "aspect fit mask length");
+
+// Vert+ (FixAspect). Scholar builds every perspective in one function; this edition has that code inlined
+// where it is used. The screen cameras' copies are in four functions, each hooked at its entry. For the
+// length of the call the vertical field of view it reads is widened to keep the 16:9 horizontal view
+// (aspect_vert_plus), then put back. The other inlined copies build light frusta from two cone angles.
+// Camera::GetProjection(out), thiscall, ret 4. ecx is the camera: +0x50 field of view, +0x5C/+0x60 game
+// area size, +0x64 aspect override (0 = use the size).
+const uint8_t kCameraProjection[] = {
+    0x53, 0x8B, 0xDC, 0x83, 0xEC, 0x08, 0x83, 0xE4, 0xF0, 0x83, 0xC4, 0x04, 0x55, 0x8B, 0x6B, 0x04,
+    0x89, 0x6C, 0x24, 0x04, 0x8B, 0xEC, 0xF3, 0x0F, 0x10, 0x49, 0x64, 0x0F, 0x57, 0xC0, 0x81, 0xEC,
+    0xC0, 0x00, 0x00, 0x00, 0x0F, 0x2E, 0xC8, 0x9F, 0xF6, 0xC4, 0x44, 0x7A, 0x2C};
+// Camera operator projection(out), thiscall, ret 4, reached from the operators' shared update. ecx is the
+// operator: +0x90 field of view, +0x94 aspect (the game area's), +0x98 near, +0x9C far.
+const uint8_t kOperatorProjection[] = {
+    0x53, 0x8B, 0xDC, 0x83, 0xEC, 0x08, 0x83, 0xE4, 0xF0, 0x83, 0xC4, 0x04, 0x55, 0x8B, 0x6B, 0x04,
+    0x89, 0x6C, 0x24, 0x04, 0x8B, 0xEC, 0x83, 0xEC, 0x70, 0xF3, 0x0F, 0x10, 0x81, 0x90, 0x00, 0x00,
+    0x00, 0xF3, 0x0F, 0x10, 0x89, 0x94, 0x00, 0x00, 0x00, 0x0F, 0x5A, 0xC0};
+// A second operator-style projection(out) with the same fields, thiscall, ret 4. The masked dword is the
+// relocated security cookie.
+const uint8_t kOperatorProjection2[] = {
+    0x53, 0x8B, 0xDC, 0x83, 0xEC, 0x08, 0x83, 0xE4, 0xF0, 0x83, 0xC4, 0x04, 0x55, 0x8B, 0x6B, 0x04,
+    0x89, 0x6C, 0x24, 0x04, 0x8B, 0xEC, 0x81, 0xEC, 0xC8, 0x00, 0x00, 0x00, 0xA1, 0x00, 0x00, 0x00,
+    0x00, 0x33, 0xC5, 0x89, 0x45, 0xFC, 0x56, 0x8B, 0x73, 0x08, 0x57, 0x8B, 0xF9, 0xF3, 0x0F, 0x10,
+    0x87, 0x90, 0x00, 0x00, 0x00, 0xF3, 0x0F, 0x10, 0x8F, 0x94, 0x00, 0x00, 0x00, 0x0F, 0x5A, 0xC0};
+const char kOperatorProjection2Mask[] = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxx????xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+static_assert(sizeof(kOperatorProjection2Mask) == sizeof(kOperatorProjection2) + 1, "operator projection mask length");
+// Target pick, thiscall, ret 8: projects the candidates with the main camera's projection, built inline from
+// the camera at (owner +0x1C) +0x160, to find the one nearest the screen centre. The owner global is the
+// "mov eax, [abs]" at +0x58. Masked: security cookie, two branch displacements and the owner global.
+const uint8_t kTargetPick[] = {
+    0x53, 0x8B, 0xDC, 0x83, 0xEC, 0x08, 0x83, 0xE4, 0xF0, 0x83, 0xC4, 0x04, 0x55, 0x8B, 0x6B, 0x04,
+    0x89, 0x6C, 0x24, 0x04, 0x8B, 0xEC, 0x81, 0xEC, 0x28, 0x01, 0x00, 0x00, 0xA1, 0x00, 0x00, 0x00,
+    0x00, 0x33, 0xC5, 0x89, 0x45, 0xFC, 0x56, 0x57, 0x8B, 0x79, 0x04, 0x89, 0x4D, 0xBC, 0x89, 0x7D,
+    0xB4, 0x85, 0xFF, 0x0F, 0x84, 0x00, 0x00, 0x00, 0x00, 0xEB, 0x08, 0xEB, 0x03, 0x8D, 0x49, 0x00,
+    0x8B, 0x7D, 0xB4, 0xF6, 0x47, 0x40, 0x20, 0x75, 0x0F, 0x8B, 0x7F, 0x38, 0x89, 0x7D, 0xB4, 0x85,
+    0xFF, 0x75, 0xED, 0xE9, 0x00, 0x00, 0x00, 0x00, 0xA1, 0x00, 0x00, 0x00, 0x00, 0x8B, 0x70, 0x1C,
+    0x8D, 0x8D, 0x30, 0xFF, 0xFF, 0xFF, 0x51, 0x8D, 0x8E, 0x60, 0x01, 0x00, 0x00};
+const char kTargetPickMask[] =
+    "xxxxxxxxxxxxxxxxxxxxxxxxxxxxx????xxxxxxxxxxxxxxxxxxxx????xxxxxxxxxxxxxxxxxxxxxxxxxxx????x????xxxxxxxxxxxxxxxx";
+static_assert(sizeof(kTargetPickMask) == sizeof(kTargetPick) + 1, "target pick mask length");
+constexpr size_t kTargetPickOwnerRef = 0x59;
+constexpr size_t kOwnerCamera = 0x1C;
+constexpr size_t kOwnerCameraBase = 0x160;
+// Camera setup: "mov eax, [KatanaMainApp]; mov ecx, [eax+2Ch]; call <width>; mov [esi+5Ch], eax; ...". The
+// screen object at app +0x2C: +0x14 windowed, game area +4/+8 in a window, +0xBA8/+0xBAC in fullscreen.
+const uint8_t kMainAppRef[] = {
+    0x0F, 0x57, 0xC0, 0xF3, 0x0F, 0x11, 0x46, 0x64, 0xA1, 0x00, 0x00, 0x00, 0x00, 0x8B, 0x48, 0x2C,
+    0xE8, 0x00, 0x00, 0x00, 0x00, 0x89, 0x46, 0x5C, 0x8B, 0x0D, 0x00, 0x00, 0x00, 0x00, 0x8B, 0x49,
+    0x2C, 0xE8, 0x00, 0x00, 0x00, 0x00, 0x0F, 0x57, 0xC0, 0xF3, 0x0F, 0x11, 0x46, 0x68};
+const char kMainAppRefMask[] = "xxxxxxxxx????xxxx????xxxxx????xxxx????xxxxxxxx";
+static_assert(sizeof(kMainAppRefMask) == sizeof(kMainAppRef) + 1, "main app mask length");
+constexpr size_t kMainAppRefGlobal = 9;
 
 void __cdecl full_fit(int* width, int* height, int* top, int* left, int backbuffer_w, int backbuffer_h) {
     *width = backbuffer_w;
@@ -767,11 +820,158 @@ void unpatch_tae() {
 
 }  // namespace
 
+// Vert+ hooks (see kCameraProjection).
+using ProjectionFn = void*(__fastcall*)(void* self, void* edx, void* out);
+using TargetPickFn = uint32_t(__fastcall*)(void* self, void* edx, uint32_t a, uint32_t b);
+InlineHook g_camera_projection;
+InlineHook g_operator_projection;
+InlineHook g_operator_projection2;
+InlineHook g_target_pick;
+uint8_t* const* g_main_app = nullptr;
+uint8_t* const* g_camera_owner = nullptr;
+
+float screen_aspect() {
+    const uint8_t* app = g_main_app ? *g_main_app : nullptr;
+    const uint8_t* screen = app ? field<const uint8_t*>(app, 0x2C) : nullptr;
+    if (!screen) {
+        return 0.0f;
+    }
+    const bool windowed = field<uint8_t>(screen, 0x14) != 0;
+    const uint32_t w = field<uint32_t>(screen, windowed ? 0x4 : 0xBA8);
+    const uint32_t h = field<uint32_t>(screen, windowed ? 0x8 : 0xBAC);
+    return h ? static_cast<float>(w) / static_cast<float>(h) : 0.0f;
+}
+
+float camera_aspect(const uint8_t* camera) {
+    const float override_aspect = field<float>(camera, 0x64);
+    if (override_aspect != 0.0f) {
+        return override_aspect;
+    }
+    const uint32_t w = field<uint32_t>(camera, 0x5C);
+    const uint32_t h = field<uint32_t>(camera, 0x60);
+    return h ? static_cast<float>(w) / static_cast<float>(h) : 0.0f;
+}
+
+// Widens the field of view at `fov` for one call when `aspect` is the game area's, and puts it back. A field
+// already widened further up this thread's call stack is left as it is.
+class FovScope {
+public:
+    FovScope(uint8_t* base, size_t offset, float aspect) {
+        if (!base || t_depth >= kMaxDepth) {
+            return;
+        }
+        float* fov = reinterpret_cast<float*>(base + offset);
+        for (int i = 0; i < t_depth; ++i) {
+            if (t_active[i] == fov) {
+                return;
+            }
+        }
+        const float screen = screen_aspect();
+        if (!(screen > 0.0f) || std::fabs(aspect - screen) >= 0.01f) {
+            return;
+        }
+        const float wider = aspect_vert_plus(*fov, aspect);
+        if (wider == *fov) {
+            return;
+        }
+        static bool logged = false;
+        if (!logged) {
+            logged = true;
+            LOG_INFO("FixAspect: game area aspect %.3f; vertical view %.1f -> %.1f deg, 16:9 horizontal view kept",
+                     aspect, *fov * 57.29578f, wider * 57.29578f);
+        }
+        fov_ = fov;
+        saved_ = *fov;
+        *fov = wider;
+        t_active[t_depth++] = fov;
+    }
+    ~FovScope() {
+        if (fov_) {
+            *fov_ = saved_;
+            --t_depth;
+        }
+    }
+    FovScope(const FovScope&) = delete;
+    FovScope& operator=(const FovScope&) = delete;
+
+private:
+    static constexpr int kMaxDepth = 8;
+    static thread_local float* t_active[kMaxDepth];
+    static thread_local int t_depth;
+    float* fov_ = nullptr;
+    float saved_ = 0.0f;
+};
+thread_local float* FovScope::t_active[FovScope::kMaxDepth] = {};
+thread_local int FovScope::t_depth = 0;
+
+void* __fastcall hk_camera_projection(void* camera, void* edx, void* out) {
+    auto* cam = static_cast<uint8_t*>(camera);
+    FovScope scope(cam, 0x50, camera_aspect(cam));
+    return reinterpret_cast<ProjectionFn>(g_camera_projection.trampoline)(camera, edx, out);
+}
+
+void* __fastcall hk_operator_projection(void* op, void* edx, void* out) {
+    auto* o = static_cast<uint8_t*>(op);
+    FovScope scope(o, 0x90, field<float>(o, 0x94));
+    return reinterpret_cast<ProjectionFn>(g_operator_projection.trampoline)(op, edx, out);
+}
+
+void* __fastcall hk_operator_projection2(void* op, void* edx, void* out) {
+    auto* o = static_cast<uint8_t*>(op);
+    FovScope scope(o, 0x90, field<float>(o, 0x94));
+    return reinterpret_cast<ProjectionFn>(g_operator_projection2.trampoline)(op, edx, out);
+}
+
+uint32_t __fastcall hk_target_pick(void* self, void* edx, uint32_t a, uint32_t b) {
+    const uint8_t* owner = g_camera_owner ? *g_camera_owner : nullptr;
+    uint8_t* camera = owner ? field<uint8_t*>(owner, kOwnerCamera) : nullptr;
+    if (camera) {
+        camera += kOwnerCameraBase;
+    }
+    FovScope scope(camera, 0x50, camera ? camera_aspect(camera) : 0.0f);
+    return reinterpret_cast<TargetPickFn>(g_target_pick.trampoline)(self, edx, a, b);
+}
+
+// Reads the absolute address operand at `at` (a relocated global).
+template <typename T>
+T absolute_operand(const uint8_t* at) {
+    uint32_t addr = 0;
+    std::memcpy(&addr, at, sizeof(addr));
+    return reinterpret_cast<T>(static_cast<uintptr_t>(addr));
+}
+
+bool patch_vert_plus() {
+    uint8_t* app_ref = find_unique(kMainAppRef, sizeof(kMainAppRef), "hk_Perspective_VertPlus", kMainAppRefMask);
+    uint8_t* pick = find_unique(kTargetPick, sizeof(kTargetPick), "hk_TargetPick_VertPlus", kTargetPickMask);
+    if (!app_ref || !pick) {
+        LOG_ERROR("hk_Perspective_VertPlus: apply failed");
+        return false;
+    }
+    g_main_app = absolute_operand<uint8_t* const*>(app_ref + kMainAppRefGlobal);
+    g_camera_owner = absolute_operand<uint8_t* const*>(pick + kTargetPickOwnerRef);
+    // Each prologue starts "push ebx; mov ebx, esp; sub esp, 8": six position-independent bytes.
+    bool ok = hook_named(g_camera_projection, nullptr, "hk_CameraProjection_VertPlus", kCameraProjection,
+                         sizeof(kCameraProjection), 6, reinterpret_cast<void*>(&hk_camera_projection));
+    ok &= hook_named(g_operator_projection, nullptr, "hk_OperatorProjection_VertPlus", kOperatorProjection,
+                     sizeof(kOperatorProjection), 6, reinterpret_cast<void*>(&hk_operator_projection));
+    ok &= hook_named(g_operator_projection2, nullptr, "hk_OperatorProjection2_VertPlus", kOperatorProjection2,
+                     sizeof(kOperatorProjection2), 6, reinterpret_cast<void*>(&hk_operator_projection2),
+                     kOperatorProjection2Mask);
+    if (g_target_pick.install(pick, reinterpret_cast<void*>(&hk_target_pick), 6)) {
+        LOG_INFO("hk_TargetPick_VertPlus: apply successful");
+    } else {
+        LOG_ERROR("hk_TargetPick_VertPlus: apply failed");
+        ok = false;
+    }
+    return ok;
+}
+
 bool patches_apply(const Settings& settings) {
     // A display fix, independent of the framerate unlock.
     bool ok = true;
     if (settings.fix_aspect) {
         ok &= patch_aspect();
+        ok &= patch_vert_plus();
     }
     if (!settings.fps_unlock) {
         if (!jump_trace_enabled()) {
@@ -861,4 +1061,8 @@ void patches_remove() {
     g_proxy_update.remove();
     restore_span(g_cloth);
     restore_span(g_aspect_fit);
+    g_camera_projection.remove();
+    g_operator_projection.remove();
+    g_operator_projection2.remove();
+    g_target_pick.remove();
 }

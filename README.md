@@ -29,10 +29,10 @@ In exclusive fullscreen both editions draw the game in the largest 16:9 rectangl
 
 `FixAspect = true` (the default) makes fullscreen behave like the window: the game area is the whole backbuffer at any aspect ratio. A 16:9 screen is unchanged. Wider screens (21:9) also fill, keeping the vertical view and showing more at the sides, with the HUD at the edges; that has not been checked in game. `FixAspect` works whether or not `FPSUnlock` is on.
 
-On a screen taller than 16:9 the two editions differ for now:
+On a screen taller than 16:9 the game keeps the horizontal view it has at 16:9 and opens the vertical one ("Vert+"), so the extra height shows more of the scene above and below instead of less at the sides. At 16:10 the default 55-degree vertical view becomes about 60 degrees. The log states the change the first time it applies.
 
-- **Scholar of the First Sin** keeps the horizontal view the game has at 16:9 and opens the vertical one, so the extra height shows more of the scene above and below. Every perspective in this edition is built by one function; screen cameras (those whose aspect is the game area's) get the wider vertical field of view there, so rendering, culling and on-screen markers all use the same view. At 16:10 the default 55-degree vertical view becomes about 60 degrees. The log states the change the first time it applies.
-- **Original Dark Souls II** fills the screen with the game's own vertical view, as a 16:10 window always has: the same height of the scene as 16:9, slightly less at the sides. This edition builds its projections inline at several places, so the same change needs a patch at each of them.
+- **Scholar of the First Sin** builds every perspective in one function. Screen cameras (those whose aspect is the game area's) get the wider vertical field of view there, so rendering, culling, shadows and on-screen markers all use the same view.
+- **Original Dark Souls II** has that code inlined where it is used. The screen cameras' copies are in four functions: the camera's projection, two camera-operator projections, and a target pick that finds the candidate nearest the screen centre. Each is hooked at its entry and reads the wider field of view for the length of the call. The other inlined copies build light frusta and are left alone.
 
 Fullscreen lists every resolution the display offers. Pick the display's own resolution (1280x800 on the Deck) in the game's options; a 16:9 resolution on a 16:10 display is still letterboxed by the display or by the Deck's scaler. Windowed mode only offers 16:9 sizes. The log names the display's resolution at start-up.
 
