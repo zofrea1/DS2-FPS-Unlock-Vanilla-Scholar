@@ -996,11 +996,12 @@ bool patches_apply(const Settings& settings) {
         }
         // Stock game with the trace: the snap is observed but never changed, and the game keeps its own
         // 60 FPS pacing. The device fix stays, since without it the stock game crashes while creating
-        // its render buffers on this display setup; it only changes presentation.
+        // its render buffers on this display setup; it only changes presentation. VSync stays off here
+        // so that presentation stays the immediate one this display setup accepts.
         LOG_INFO("FPSUnlock is false; only the jump trace and the device fix are installed");
         g_snap_observe_only = true;
         auto* exe = reinterpret_cast<uint8_t*>(GetModuleHandleW(nullptr));
-        return ok && near_arena_init(exe + 0x1000) && present_apply() && patch_snap() && patch_jump_trace();
+        return ok && near_arena_init(exe + 0x1000) && present_apply(false, 0) && patch_snap() && patch_jump_trace();
     }
 
     const DWORD stamp = exe_timestamp();
@@ -1023,7 +1024,7 @@ bool patches_apply(const Settings& settings) {
                      reinterpret_cast<void*>(&hk_step), kStepMask);
     ok &= patch_byte(g_measured, kMeasured, sizeof(kMeasured), 7, 0x74, 0xEB, "pch_UseMeasuredDeltatime");
     ok &= patch_byte(g_clamp, kClamp, sizeof(kClamp), 4, 0x08, 0xFC, "pch_FrameDeltaMinClamp");
-    ok &= present_apply();
+    ok &= present_apply(settings.vsync, settings.fps_limit);
     if (settings.durability_fix) {
         ok &= hook_named(g_dur_weapon, &g_dur_weapon_tramp, "hk_Durability_Weapon", kDurWeapon, sizeof(kDurWeapon), 6,
                          reinterpret_cast<void*>(&hk_dur_weapon));

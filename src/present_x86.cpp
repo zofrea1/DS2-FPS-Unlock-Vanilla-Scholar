@@ -2,6 +2,7 @@
 
 #include "display.h"
 #include "iat.h"
+#include "limiter.h"
 #include "log.h"
 
 #define WIN32_LEAN_AND_MEAN
@@ -20,10 +21,11 @@
 // at 60 because the frames are blitted into the desktop compositor. A
 // flip-model swapchain was tried and crashed during boot, so windowed
 // parameters are passed through unchanged. Fullscreen is rewritten to
-// immediate presentation at display_fullscreen_hz(). If that mode is refused,
-// immediate presentation is kept at the game's own refresh before the game's
-// parameters are used unchanged: DXVK (the Steam Deck) caps a vsynced
-// fullscreen device at its mode's refresh rate.
+// immediate presentation at display_fullscreen_hz(), or to one vblank at that
+// rate when VSync is on. If that mode is refused, the same interval is tried
+// at the game's own refresh. A refused vsync interval falls back to immediate
+// presentation before the game's parameters are used unchanged: DXVK (the
+// Steam Deck) caps a vsynced fullscreen device at its mode's refresh rate.
 
 namespace {
 
@@ -44,6 +46,7 @@ Slot g_reset;
 Slot g_present;
 
 bool g_applied = false;
+bool g_vsync = false;
 
 UINT g_swap = 0;
 UINT g_interval = 0;
@@ -74,12 +77,13 @@ UINT monitor_hz(HWND hwnd) {
     return 0;
 }
 
-// Fullscreen only: immediate presentation, and when `raise` the refresh rate raised to the target.
-void force_immediate(D3DPRESENT_PARAMETERS* pp, bool raise) {
+// Fullscreen only. `vsync` waits for one vblank; otherwise presentation is immediate.
+// When `raise` is set, a refresh below the target is raised to it.
+void rewrite_fullscreen(D3DPRESENT_PARAMETERS* pp, bool vsync, bool raise) {
     if (pp->Windowed) {
         return;
     }
-    pp->PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE;
+    pp->PresentationInterval = vsync ? D3DPRESENT_INTERVAL_ONE : D3DPRESENT_INTERVAL_IMMEDIATE;
     UINT hz = display_fullscreen_hz();
     if (hz == 0) {
         hz = monitor_hz(pp->hDeviceWindow);
@@ -142,6 +146,7 @@ void log_params(const char* what, const char* attempt, HRESULT hr, const D3DPRES
 
 HRESULT WINAPI hook_Present(IDirect3DDevice9* self, const RECT* source, const RECT* dest, HWND window,
                             const RGNDATA* dirty) {
+    limiter_wait();
     LARGE_INTEGER now{};
     QueryPerformanceCounter(&now);
     auto* present = reinterpret_cast<PresentFn>(g_present.original);
@@ -162,23 +167,34 @@ HRESULT WINAPI hook_Present(IDirect3DDevice9* self, const RECT* source, const RE
 
 void fill_attempts(const D3DPRESENT_PARAMETERS& original, D3DPRESENT_PARAMETERS* out, const char** names, int* count) {
     int n = 0;
-    out[n] = original;
-    force_immediate(&out[n], true);
-    names[n] = original.Windowed ? "windowed" : "immediate";
-    ++n;
-    // A rejected refresh rate keeps immediate presentation at the game's own rate, then falls back to the game's
-    // original parameters.
-    if (!original.Windowed) {
-        if (out[0].FullScreen_RefreshRateInHz != original.FullScreen_RefreshRateInHz) {
-            out[n] = original;
-            force_immediate(&out[n], false);
-            names[n] = "immediate at the game's refresh";
-            ++n;
-        }
+    if (original.Windowed) {
         out[n] = original;
-        names[n] = "original";
+        names[n] = "windowed";
+        *count = 1;
+        return;
+    }
+    out[n] = original;
+    rewrite_fullscreen(&out[n], g_vsync, true);
+    names[n] = g_vsync ? "vsync" : "immediate";
+    ++n;
+    // A rejected refresh rate keeps the same interval at the game's own rate. A rejected vsync interval then
+    // falls back to immediate presentation, which is what this display setup accepts, and finally to the game's
+    // original parameters.
+    if (out[0].FullScreen_RefreshRateInHz != original.FullScreen_RefreshRateInHz) {
+        out[n] = original;
+        rewrite_fullscreen(&out[n], g_vsync, false);
+        names[n] = g_vsync ? "vsync at the game's refresh" : "immediate at the game's refresh";
         ++n;
     }
+    if (g_vsync) {
+        out[n] = original;
+        rewrite_fullscreen(&out[n], false, true);
+        names[n] = "immediate";
+        ++n;
+    }
+    out[n] = original;
+    names[n] = "original";
+    ++n;
     *count = n;
 }
 
@@ -188,8 +204,8 @@ HRESULT WINAPI hook_Reset(IDirect3DDevice9* self, D3DPRESENT_PARAMETERS* pp) {
         return reset(self, pp);
     }
     const D3DPRESENT_PARAMETERS original = *pp;
-    D3DPRESENT_PARAMETERS tries[3]{};
-    const char* names[3] = {};
+    D3DPRESENT_PARAMETERS tries[4]{};
+    const char* names[4] = {};
     int count = 0;
     fill_attempts(original, tries, names, &count);
     HRESULT hr = E_FAIL;
@@ -217,8 +233,8 @@ HRESULT WINAPI hook_CreateDevice(IDirect3D9* self, UINT adapter, D3DDEVTYPE type
              original.PresentationInterval, static_cast<unsigned>(original.SwapEffect),
              static_cast<unsigned>(original.MultiSampleType), monitor_hz(focus));
 
-    D3DPRESENT_PARAMETERS tries[3]{};
-    const char* names[3] = {};
+    D3DPRESENT_PARAMETERS tries[4]{};
+    const char* names[4] = {};
     int count = 0;
     fill_attempts(original, tries, names, &count);
     HRESULT hr = E_FAIL;
@@ -249,18 +265,22 @@ IDirect3D9* WINAPI hook_Direct3DCreate9(UINT sdk) {
 
 }  // namespace
 
-bool present_apply() {
+bool present_apply(bool vsync, int fps_limit) {
+    g_vsync = vsync;
     QueryPerformanceFrequency(&g_qpc_freq);
     if (!g_iat_create9.install("d3d9.dll", "Direct3DCreate9", reinterpret_cast<void*>(&hook_Direct3DCreate9))) {
         LOG_ERROR("hk_Direct3DCreate9: apply failed");
         return false;
     }
     LOG_INFO("hk_Direct3DCreate9: apply successful");
+    limiter_start(fps_limit);
+    LOG_INFO("Fullscreen vsync: %s", vsync ? "on (one vblank at the fullscreen refresh)" : "off (immediate)");
     g_applied = true;
     return true;
 }
 
 void present_remove() {
+    limiter_stop();
     if (!g_applied) {
         return;
     }

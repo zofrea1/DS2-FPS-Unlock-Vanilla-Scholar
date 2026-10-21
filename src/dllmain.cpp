@@ -83,7 +83,7 @@ void startup(HMODULE self) {
 #else
     const char* build = "64-bit, Scholar of the First Sin";
 #endif
-    LOG_INFO("DS2-FPS-Unlock v1.2.0 (%s; built %s %s)", build, __DATE__, __TIME__);
+    LOG_INFO("DS2-FPS-Unlock v1.3.0 (%s; built %s %s)", build, __DATE__, __TIME__);
 
     char exe_narrow[MAX_PATH];
     char dll_narrow[MAX_PATH];
@@ -104,6 +104,8 @@ void startup(HMODULE self) {
     const Settings settings = settings_load(dll_path);
     LOG_INFO("Settings values:");
     LOG_INFO(" - FPSUnlock: %s", settings.fps_unlock ? "true" : "false");
+    LOG_INFO(" - FPSLimit: %d%s", settings.fps_limit, settings.fps_limit > 0 ? "" : " (uncapped)");
+    LOG_INFO(" - VSync: %s", settings.vsync ? "true" : "false");
     LOG_INFO(" - PhysicsFPS: %d", settings.physics_fps);
     LOG_INFO(" - GroundSnapFix: %s", settings.ground_snap_fix ? "true" : "false");
     LOG_INFO(" - ForwardAttackFix: %s", settings.forward_attack_fix ? "true" : "false");
@@ -116,6 +118,9 @@ void startup(HMODULE self) {
     LOG_INFO(" - ChainDll: %s", settings.chain_dll.empty() ? "(none)" : settings.chain_dll.c_str());
     proxy_set_chain(settings.chain_dll.c_str());
     display_init(settings.fullscreen_refresh, settings.fix_aspect);
+    if (!settings.fps_unlock && (settings.fps_limit > 0 || settings.vsync)) {
+        LOG_INFO("FPSLimit and VSync take effect with FPSUnlock; the game keeps its own pacing");
+    }
     if (settings.jump_trace) {
         const bool open = jump_trace_open(dll_path, settings.fps_unlock ? L"unlocked" : L"stock");
         LOG_INFO(" - JumpTrace: %s", open ? "writing DS2-FPS-Unlock-jumptrace-*.csv" : "could not open the CSV");

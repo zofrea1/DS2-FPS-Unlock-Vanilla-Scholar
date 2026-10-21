@@ -2,6 +2,7 @@
 
 #include "display.h"
 #include "iat.h"
+#include "limiter.h"
 #include "log.h"
 
 #define WIN32_LEAN_AND_MEAN
@@ -56,6 +57,11 @@ LARGE_INTEGER g_present_t0{};
 volatile LONG g_present_count = 0;
 volatile LONG g_present_logged = 0;
 volatile LONG g_refresh_logs = 0;
+bool g_vsync = false;
+
+#ifndef DXGI_PRESENT_ALLOW_TEARING
+#define DXGI_PRESENT_ALLOW_TEARING 0x00000200UL
+#endif
 
 void** vtable_of(void* object) {
     return *static_cast<void***>(object);
@@ -124,8 +130,16 @@ HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* self, UINT sync, UINT flags
     }
     const UINT asked = sync;
     if (fullscreen) {
-        sync = 0;
+        if (g_vsync) {
+            // One vblank at the refresh CreateSwapChain asked for. Tearing flags are only valid with interval 0,
+            // and DO_NOT_WAIT is rejected when the interval is not 0.
+            sync = 1;
+            flags &= ~(DXGI_PRESENT_DO_NOT_WAIT | DXGI_PRESENT_ALLOW_TEARING);
+        } else {
+            sync = 0;
+        }
     }
+    limiter_wait();
     LARGE_INTEGER now{};
     QueryPerformanceCounter(&now);
     const HRESULT hr = present ? present(self, sync, flags) : E_FAIL;
@@ -283,7 +297,10 @@ void restore_slot(const Slot& slot) {
 
 }  // namespace
 
-bool dxgi_apply() {
+bool dxgi_apply(bool vsync, int fps_limit) {
+    g_vsync = vsync;
+    limiter_start(fps_limit);
+    LOG_INFO("Fullscreen vsync: %s", vsync ? "on (one vblank at the fullscreen refresh)" : "off (immediate)");
     QueryPerformanceFrequency(&g_qpc_freq);
     bool ok = true;
     if (g_iat_factory.install("dxgi.dll", "CreateDXGIFactory", reinterpret_cast<void*>(&hk_CreateDXGIFactory))) {
@@ -302,6 +319,7 @@ bool dxgi_apply() {
 }
 
 void dxgi_remove() {
+    limiter_stop();
     g_iat_factory.remove();
     g_iat_device.remove();
     AcquireSRWLockExclusive(&g_slot_lock);

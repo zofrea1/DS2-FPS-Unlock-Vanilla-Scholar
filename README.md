@@ -4,14 +4,14 @@
 
 High-FPS unlock with gameplay physics fixes for both editions of Dark Souls II: the original game (Vanilla, 32-bit DirectX 9) and Scholar of the First Sin (64-bit DirectX 11). Jumps, attack inputs, animation events, cloth and equipment durability are kept in step with how the game plays at 60 FPS. Fullscreen also fills 16:10 screens such as the Steam Deck's, without black bars. One source tree builds both editions.
 
-The mod removes the game's own limiter. It does not install a new one. Cap the framerate with RTSS, the NVIDIA control panel, the Steam Deck's frame limit or another limiter, and set `PhysicsFPS` to that same number (default 120).
+The mod removes the game's own limiter. `FPSLimit` (default 0) is a cap in frames per second; 0 leaves the framerate uncapped, and RTSS, the NVIDIA control panel or the Steam Deck's frame limit still work. Set `PhysicsFPS` to the cap you actually run at (default 120). `VSync` (default false) presents fullscreen immediately; set it true to wait for one vblank at `FullscreenRefreshRate`.
 
 | Game | Download | DLL to install |
 | --- | --- | --- |
 | Scholar of the First Sin (64-bit, DirectX 11) | release `v1.2.0-SCHOLAR-DX11` | `xinput1_3.dll` from that archive |
 | Original Dark Souls II, Vanilla (32-bit, DirectX 9) | release `v1.2.0-VANILLA-DX9` | `xinput1_3.dll` from that archive |
 
-Put the DLL next to `DarkSoulsII.exe`, along with `DS2-FPS-Unlock.ini`. The executable on disk is not modified. The two games cannot share a DLL.
+Put the DLL next to `DarkSoulsII.exe`, along with `DS2-FPS-Unlock.ini`. The executable on disk is not modified. The two games cannot share a DLL. `FPSLimit` and `VSync` are in the source after the 1.2.0 releases listed above.
 
 ## DLL names
 
@@ -51,7 +51,7 @@ On a screen taller than 16:9 the game keeps the horizontal view it has at 16:9 a
 
 Fullscreen lists every resolution the display offers. Pick the display's own resolution (1280x800 on the Deck) in the game's options; a 16:9 resolution on a 16:10 display is still letterboxed by the display or by the Deck's scaler. Windowed mode only offers 16:9 sizes, so on the Deck only fullscreen fills the screen. The log names the display's resolution at start-up, and the original game's log names the fullscreen game area it uses.
 
-**Fullscreen frame rate.** Both games ask for a 60 Hz display mode in exclusive fullscreen and wait for vsync. On Windows that runs the screen at 60 Hz; on the Steam Deck, DXVK (which Proton uses for both games) caps a fullscreen game with vsync to the refresh rate of the mode it asked for, so Scholar stayed at 60 FPS in fullscreen even with the Deck at 90 Hz, while a window was not capped. With `FPSUnlock = true`, fullscreen now asks for your desktop's refresh rate (or `FullscreenRefreshRate`) and presents without waiting for vsync, in both games. Cap the frame rate with the Deck's frame limit or RTSS as usual.
+**Fullscreen frame rate.** Both games ask for a 60 Hz display mode in exclusive fullscreen and wait for vsync. On Windows that runs the screen at 60 Hz; on the Steam Deck, DXVK (which Proton uses for both games) caps a fullscreen game with vsync to the refresh rate of the mode it asked for, so Scholar stayed at 60 FPS in fullscreen even with the Deck at 90 Hz, while a window was not capped. With `FPSUnlock = true`, fullscreen now asks for your desktop's refresh rate (or `FullscreenRefreshRate`). `VSync = false` presents without waiting for vsync, in both games. `VSync = true` waits for one vblank at that rate, so the picture is tear-free and the framerate follows the screen. Cap the frame rate with `FPSLimit`, the Deck's frame limit or RTSS.
 
 Steam Deck (Proton): set the game's launch options to `WINEDLLOVERRIDES="xinput1_3=n,b" %command%` so Wine loads this DLL instead of its own `xinput1_3` (or the option for the name you installed, see [DLL names](#dll-names)). Controller input is forwarded to Wine's `xinput1_4`; forwarding to `xinput1_3` would reach this DLL again. Version 1.1.0 forwarded to the system `xinput1_3`, which under Proton leaves the controller dead while the keyboard still works.
 
@@ -61,9 +61,13 @@ Steam Deck (Proton): set the game's launch options to `WINEDLLOVERRIDES="xinput1
 
 `FPSUnlock = true` turns the whole fix on. The individual fixes have their own switches, all `true` by default: `GroundSnapFix`, `ForwardAttackFix` and `TaeEventFix` (described below), `ClothFix` (cloth stepped with the real frame time) and `DurabilityFix` (durability loss scaled to the frame time). `GroundSnapFix = false` falls back to the old jump workaround that never snaps. The original mod's names `JumpHeightFix` and `ClothSpeedFix` are also accepted.
 
+`FPSLimit` (`[Framerate]`, default `0`) caps the unlocked framerate in windowed mode and in fullscreen. `0` does not cap. Any other number is frames per second. The mod waits before Present, so the frame time the gameplay fixes see is the capped one. A frame that already ran longer than the cap is presented immediately, and a hitch does not make the following frames rush to catch up.
+
+`VSync` (`[Display]`, default `false`) is fullscreen only. `false` presents immediately, which is how the unlock gets past the screen's refresh. `true` waits for one vblank at `FullscreenRefreshRate` (the desktop rate, or the rate you set) instead of the 60 Hz mode the games ask for. The framerate then follows the screen, unless `FPSLimit` is lower. Windowed presentation is left as the game set it. The original game's picture is still fullscreen only; its window stays on the blit path. Both keys apply when `FPSUnlock` is on.
+
 `FullscreenRefreshRate` (`[Display]`, default `0`) is the refresh rate exclusive fullscreen asks for with `FPSUnlock = true`: `0` is your desktop's own rate, a number asks for that rate. `ChainDll` (`[Loader]`, default empty) is another mod's DLL to pass this DLL's calls on to, see [DLL names](#dll-names).
 
-`PhysicsFPS` is the rate given to Havok as the expected maximum, 120 by default. Set it to your external cap. A 60 FPS frame is unchanged. Faster frames shorten the physics step and scale durability loss by `frameTime * 60` (clamped to 0.05–2), including hits from enemies, bosses, and other players, for weapons, armor, and rings.
+`PhysicsFPS` is the rate given to Havok as the expected maximum, 120 by default. Set it to `FPSLimit` when that is not 0, to your external cap, or to the refresh rate when `VSync` is what holds the framerate. A 60 FPS frame is unchanged. Faster frames shorten the physics step and scale durability loss by `frameTime * 60` (clamped to 0.05–2), including hits from enemies, bosses, and other players, for weapons, armor, and rings.
 
 `JumpTrace` (default `false`) is a diagnostic for jump bug reports. It writes the player's per-frame jump physics to `DS2-FPS-Unlock-jumptrace-*.csv` next to the game, one file per launch. With `FPSUnlock = false` it only observes the stock game, for comparison.
 

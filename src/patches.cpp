@@ -981,7 +981,7 @@ bool patches_apply(const Settings& settings) {
                      reinterpret_cast<void*>(&hk_frame_time));
     ok &= hook_named(g_update_hook, "hk_KatanaMainApp_UpdateDT", kUpdateDt, sizeof(kUpdateDt), 5,
                      reinterpret_cast<void*>(&hk_update));
-    ok &= dxgi_apply();
+    ok &= dxgi_apply(settings.vsync, settings.fps_limit);
     ok &= settings.ground_snap_fix ? patch_snap() : patch_jump();
     if (jump_trace_enabled()) {
         ok &= patch_jump_trace();

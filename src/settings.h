@@ -5,6 +5,10 @@
 struct Settings {
     bool fps_unlock = true;
     int physics_fps = 120;
+    // Cap in frames per second after the game's own 60 FPS wait is removed. 0 leaves the framerate uncapped.
+    int fps_limit = 0;
+    // Fullscreen presents immediately when fps_unlock is on. true waits for one vblank at fullscreen_refresh.
+    bool vsync = false;
     // Release the body from the ground snap on the frames where 60 FPS would (ground_release in
     // frame_fixes.h). false restores the old "never snap to the ground" jump workaround.
     bool ground_snap_fix = true;

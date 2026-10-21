@@ -73,6 +73,10 @@ Settings settings_load(const wchar_t* dll_path) {
         const std::string val = trim(line.substr(eq + 1));
         if (key == "fpsunlock") {
             s.fps_unlock = parse_bool(val);
+        } else if (key == "fpslimit") {
+            s.fps_limit = std::atoi(val.c_str());
+        } else if (key == "vsync") {
+            s.vsync = parse_bool(val);
         } else if (key == "groundsnapfix" || key == "jumpheightfix") {
             s.ground_snap_fix = parse_bool(val);
         } else if (key == "forwardattackfix") {
@@ -97,6 +101,12 @@ Settings settings_load(const wchar_t* dll_path) {
     }
     if (s.physics_fps < 1) {
         s.physics_fps = Settings{}.physics_fps;
+    }
+    if (s.fps_limit < 0) {
+        s.fps_limit = 0;
+    } else if (s.fps_limit > 1000) {
+        LOG_INFO("FPSLimit %d is above 1000; using 1000", s.fps_limit);
+        s.fps_limit = 1000;
     }
     if (s.fullscreen_refresh < 0 || s.fullscreen_refresh > 1000) {
         s.fullscreen_refresh = 0;
