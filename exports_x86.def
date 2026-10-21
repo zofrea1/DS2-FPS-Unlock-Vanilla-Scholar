@@ -1,0 +1,33 @@
+; Original Dark Souls II (32-bit). The DLL can be named xinput1_3.dll, d3d9.dll or dinput8.dll (src/proxy.h).
+; The game imports XInputGetState and XInputSetState from xinput1_3.dll by ordinal, so those ordinals are fixed.
+EXPORTS
+    XInputGetState                           @2
+    XInputSetState                           @3
+    XInputGetCapabilities                    @4
+    XInputEnable                             @5
+    XInputGetDSoundAudioDeviceGuids          @6
+    XInputGetBatteryInformation              @7
+    XInputGetKeystroke                       @8
+    Direct3DCreate9                          = fwd_Direct3DCreate9
+    Direct3DCreate9Ex                        = fwd_Direct3DCreate9Ex
+    D3DPERF_BeginEvent                       = fwd_D3DPERF_BeginEvent
+    D3DPERF_EndEvent                         = fwd_D3DPERF_EndEvent
+    D3DPERF_GetStatus                        = fwd_D3DPERF_GetStatus
+    D3DPERF_QueryRepeatFrame                 = fwd_D3DPERF_QueryRepeatFrame
+    D3DPERF_SetMarker                        = fwd_D3DPERF_SetMarker
+    D3DPERF_SetOptions                       = fwd_D3DPERF_SetOptions
+    D3DPERF_SetRegion                        = fwd_D3DPERF_SetRegion
+    DebugSetLevel                            = fwd_DebugSetLevel
+    DebugSetMute                             = fwd_DebugSetMute
+    Direct3D9EnableMaximizedWindowedModeShim = fwd_Direct3D9EnableMaximizedWindowedModeShim
+    Direct3DShaderValidatorCreate9           = fwd_Direct3DShaderValidatorCreate9
+    PSGPError                                = fwd_PSGPError
+    PSGPSampleTexture                        = fwd_PSGPSampleTexture
+    Direct3DCreate9On12                      = fwd_Direct3DCreate9On12
+    Direct3DCreate9On12Ex                    = fwd_Direct3DCreate9On12Ex
+    DirectInput8Create                       = fwd_DirectInput8Create
+    DllCanUnloadNow                          = fwd_DllCanUnloadNow PRIVATE
+    DllGetClassObject                        = fwd_DllGetClassObject PRIVATE
+    DllRegisterServer                        = fwd_DllRegisterServer PRIVATE
+    DllUnregisterServer                      = fwd_DllUnregisterServer PRIVATE
+    GetdfDIJoystick                          = fwd_GetdfDIJoystick

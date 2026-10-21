@@ -1,5 +1,7 @@
 #include "present_x86.h"
 
+#include "display.h"
+#include "iat.h"
 #include "log.h"
 
 #define WIN32_LEAN_AND_MEAN
@@ -18,7 +20,10 @@
 // at 60 because the frames are blitted into the desktop compositor. A
 // flip-model swapchain was tried and crashed during boot, so windowed
 // parameters are passed through unchanged. Fullscreen is rewritten to
-// immediate presentation at the monitor's current refresh.
+// immediate presentation at display_fullscreen_hz(). If that mode is refused,
+// immediate presentation is kept at the game's own refresh before the game's
+// parameters are used unchanged: DXVK (the Steam Deck) caps a vsynced
+// fullscreen device at its mode's refresh rate.
 
 namespace {
 
@@ -33,8 +38,7 @@ struct Slot {
     void* original = nullptr;
 };
 
-Create9Fn g_create9 = nullptr;
-void** g_iat = nullptr;
+IatHook g_iat_create9;
 Slot g_create_device;
 Slot g_reset;
 Slot g_present;
@@ -70,14 +74,17 @@ UINT monitor_hz(HWND hwnd) {
     return 0;
 }
 
-void force_immediate(D3DPRESENT_PARAMETERS* pp) {
+// Fullscreen only: immediate presentation, and when `raise` the refresh rate raised to the target.
+void force_immediate(D3DPRESENT_PARAMETERS* pp, bool raise) {
     if (pp->Windowed) {
         return;
     }
     pp->PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE;
-    const UINT hz = monitor_hz(pp->hDeviceWindow);
-    const UINT refresh = pp->FullScreen_RefreshRateInHz;
-    if (hz > 60 && (refresh == 0 || refresh == 59 || refresh == 60)) {
+    UINT hz = display_fullscreen_hz();
+    if (hz == 0) {
+        hz = monitor_hz(pp->hDeviceWindow);
+    }
+    if (raise && hz > 60 && pp->FullScreen_RefreshRateInHz < hz) {
         pp->FullScreen_RefreshRateInHz = hz;
     }
 }
@@ -156,11 +163,18 @@ HRESULT WINAPI hook_Present(IDirect3DDevice9* self, const RECT* source, const RE
 void fill_attempts(const D3DPRESENT_PARAMETERS& original, D3DPRESENT_PARAMETERS* out, const char** names, int* count) {
     int n = 0;
     out[n] = original;
-    force_immediate(&out[n]);
+    force_immediate(&out[n], true);
     names[n] = original.Windowed ? "windowed" : "immediate";
     ++n;
-    // A rejected fullscreen mode falls back to the game's original parameters.
+    // A rejected refresh rate keeps immediate presentation at the game's own rate, then falls back to the game's
+    // original parameters.
     if (!original.Windowed) {
+        if (out[0].FullScreen_RefreshRateInHz != original.FullScreen_RefreshRateInHz) {
+            out[n] = original;
+            force_immediate(&out[n], false);
+            names[n] = "immediate at the game's refresh";
+            ++n;
+        }
         out[n] = original;
         names[n] = "original";
         ++n;
@@ -225,7 +239,7 @@ HRESULT WINAPI hook_CreateDevice(IDirect3D9* self, UINT adapter, D3DDEVTYPE type
 }
 
 IDirect3D9* WINAPI hook_Direct3DCreate9(UINT sdk) {
-    IDirect3D9* d3d = g_create9(sdk);
+    IDirect3D9* d3d = reinterpret_cast<Create9Fn>(g_iat_create9.original)(sdk);
     if (d3d) {
         patch_slot(d3d, 16, reinterpret_cast<void*>(&hook_CreateDevice), &g_create_device);
         LOG_INFO("Direct3DCreate9 sdk=%u", sdk);
@@ -233,49 +247,11 @@ IDirect3D9* WINAPI hook_Direct3DCreate9(UINT sdk) {
     return d3d;
 }
 
-bool patch_iat() {
-    auto* base = reinterpret_cast<uint8_t*>(GetModuleHandleW(nullptr));
-    auto* dos = reinterpret_cast<IMAGE_DOS_HEADER*>(base);
-    auto* nt = reinterpret_cast<IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
-    const auto& dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
-    if (!dir.VirtualAddress) {
-        return false;
-    }
-    auto* desc = reinterpret_cast<IMAGE_IMPORT_DESCRIPTOR*>(base + dir.VirtualAddress);
-    for (; desc->Name; ++desc) {
-        const char* dll = reinterpret_cast<const char*>(base + desc->Name);
-        if (_stricmp(dll, "d3d9.dll") != 0 || !desc->OriginalFirstThunk) {
-            continue;
-        }
-        auto* hint = reinterpret_cast<IMAGE_THUNK_DATA*>(base + desc->OriginalFirstThunk);
-        auto* iat = reinterpret_cast<IMAGE_THUNK_DATA*>(base + desc->FirstThunk);
-        for (; hint->u1.AddressOfData; ++hint, ++iat) {
-            if (IMAGE_SNAP_BY_ORDINAL(hint->u1.Ordinal)) {
-                continue;
-            }
-            auto* name = reinterpret_cast<IMAGE_IMPORT_BY_NAME*>(base + hint->u1.AddressOfData);
-            if (std::strcmp(name->Name, "Direct3DCreate9") != 0) {
-                continue;
-            }
-            DWORD old = 0;
-            if (!VirtualProtect(&iat->u1.Function, sizeof(void*), PAGE_READWRITE, &old)) {
-                return false;
-            }
-            g_create9 = reinterpret_cast<Create9Fn>(iat->u1.Function);
-            g_iat = reinterpret_cast<void**>(&iat->u1.Function);
-            iat->u1.Function = reinterpret_cast<ULONG_PTR>(&hook_Direct3DCreate9);
-            VirtualProtect(&iat->u1.Function, sizeof(void*), old, &old);
-            return g_create9 != nullptr;
-        }
-    }
-    return false;
-}
-
 }  // namespace
 
 bool present_apply() {
     QueryPerformanceFrequency(&g_qpc_freq);
-    if (!patch_iat()) {
+    if (!g_iat_create9.install("d3d9.dll", "Direct3DCreate9", reinterpret_cast<void*>(&hook_Direct3DCreate9))) {
         LOG_ERROR("hk_Direct3DCreate9: apply failed");
         return false;
     }
@@ -288,16 +264,9 @@ void present_remove() {
     if (!g_applied) {
         return;
     }
-    if (g_iat && g_create9) {
-        DWORD old = 0;
-        if (VirtualProtect(g_iat, sizeof(void*), PAGE_READWRITE, &old)) {
-            *g_iat = reinterpret_cast<void*>(g_create9);
-            VirtualProtect(g_iat, sizeof(void*), old, &old);
-        }
-    }
+    g_iat_create9.remove();
     restore_slot(&g_create_device);
     restore_slot(&g_reset);
     restore_slot(&g_present);
-    g_iat = nullptr;
     g_applied = false;
 }

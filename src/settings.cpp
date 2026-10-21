@@ -89,10 +89,17 @@ Settings settings_load(const wchar_t* dll_path) {
             s.fix_aspect = parse_bool(val);
         } else if (key == "physicsfps") {
             s.physics_fps = std::atoi(val.c_str());
+        } else if (key == "fullscreenrefreshrate") {
+            s.fullscreen_refresh = std::atoi(val.c_str());
+        } else if (key == "chaindll") {
+            s.chain_dll = val;
         }
     }
     if (s.physics_fps < 1) {
         s.physics_fps = Settings{}.physics_fps;
+    }
+    if (s.fullscreen_refresh < 0 || s.fullscreen_refresh > 1000) {
+        s.fullscreen_refresh = 0;
     }
     return s;
 }

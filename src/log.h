@@ -2,7 +2,8 @@
 
 #include <cstdarg>
 
-void log_init(const wchar_t* dll_path);
+// Opens DS2-FPS-Unlock.log next to the DLL, emptied unless `append`.
+void log_init(const wchar_t* dll_path, bool append = false);
 void log_write(const char* level, const char* fmt, ...);
 void log_close();
 

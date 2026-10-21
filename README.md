@@ -4,16 +4,31 @@
 
 High-FPS unlock with gameplay physics fixes for both editions of Dark Souls II: the original game (Vanilla, 32-bit DirectX 9) and Scholar of the First Sin (64-bit DirectX 11). Jumps, attack inputs, animation events, cloth and equipment durability are kept in step with how the game plays at 60 FPS. Fullscreen also fills 16:10 screens such as the Steam Deck's, without black bars. One source tree builds both editions.
 
-The mod removes the game's own limiter. It does not install a new one. Cap the framerate with RTSS, the NVIDIA control panel, or another limiter, and set `PhysicsFPS` to that same number (default 120).
+The mod removes the game's own limiter. It does not install a new one. Cap the framerate with RTSS, the NVIDIA control panel, the Steam Deck's frame limit or another limiter, and set `PhysicsFPS` to that same number (default 120).
 
 | Game | Download | DLL to install |
 | --- | --- | --- |
 | Scholar of the First Sin (64-bit, DirectX 11) | release `v1.2.0-SCHOLAR-DX11` | `xinput1_3.dll` from that archive |
 | Original Dark Souls II, Vanilla (32-bit, DirectX 9) | release `v1.2.0-VANILLA-DX9` | `xinput1_3.dll` from that archive |
 
-The game imports `XINPUT1_3.dll` by ordinal. The file has to keep that name, next to `DarkSoulsII.exe`, along with `DS2-FPS-Unlock.ini`. Controller calls are forwarded to the system's XInput (`xinput1_4`, the Windows 8 and later library). The executable on disk is not modified.
+Put the DLL next to `DarkSoulsII.exe`, along with `DS2-FPS-Unlock.ini`. The executable on disk is not modified. The two games cannot share a DLL.
 
-The two games cannot share a DLL.
+## DLL names
+
+The DLL works under any of the names below, all of which the game loads at start-up. Rename it when `xinput1_3.dll` is already taken by another mod, or to leave the game's controller library alone:
+
+| Name | Scholar of the First Sin | Original Dark Souls II | What the DLL does besides the mod |
+| --- | --- | --- | --- |
+| `xinput1_3.dll` (as shipped) | yes | yes | Passes controller calls on to the system's XInput (`xinput1_4`, the Windows 8 and later library; under Proton, Wine's controller backend) |
+| `dxgi.dll` | yes | no | Passes DXGI calls on to the real `dxgi.dll` |
+| `d3d9.dll` | no | yes | Passes Direct3D 9 calls on to the real `d3d9.dll` |
+| `dinput8.dll` | yes (Windows only) | yes (Windows only) | Passes DirectInput calls on to the real `dinput8.dll` |
+
+Under any name other than `xinput1_3.dll` the game reads its controller through its own `xinput1_3.dll`, untouched. The log (`DS2-FPS-Unlock.log`) states the name the mod was loaded as and, for `xinput1_3.dll`, the XInput library it uses and each controller slot as it connects.
+
+If another mod needs the same name (for example ReShade as `dxgi.dll`), rename that mod's DLL (for example to `reshade-dxgi.dll`) and set `ChainDll = reshade-dxgi.dll` in `[Loader]`: this mod then passes the calls on to that DLL instead of to the system's, and both run.
+
+**Linux and the Steam Deck (Proton).** Wine uses its own copy of a system DLL unless the launch options name the DLL, so set them to the name you installed: `WINEDLLOVERRIDES="xinput1_3=n,b" %command%`, `WINEDLLOVERRIDES="dxgi=n,b" %command%` or `WINEDLLOVERRIDES="d3d9=n,b" %command%`. Several DLLs (this mod plus another mod's) go in one list: `WINEDLLOVERRIDES="xinput1_3=n,b;dxgi=n,b" %command%`. `dxgi.dll` and `d3d9.dll` rely on DXVK, which Proton uses by default. `dinput8.dll` does not work under Proton: Wine's own `dinput8` cannot be reached from a DLL with that name.
 
 ## DirectX 9
 
@@ -34,15 +49,19 @@ On a screen taller than 16:9 the game keeps the horizontal view it has at 16:9 a
 - **Scholar of the First Sin** builds every perspective in one function. Screen cameras (those whose aspect is the game area's) get the wider vertical field of view there, so rendering, culling, shadows and on-screen markers all use the same view.
 - **Original Dark Souls II** has that code inlined where it is used. The screen cameras' copies are in four functions: the camera's projection, two camera-operator projections, and a target pick that finds the candidate nearest the screen centre. Each is hooked at its entry and reads the wider field of view for the length of the call. The other inlined copies build light frusta and are left alone.
 
-Fullscreen lists every resolution the display offers. Pick the display's own resolution (1280x800 on the Deck) in the game's options; a 16:9 resolution on a 16:10 display is still letterboxed by the display or by the Deck's scaler. Windowed mode only offers 16:9 sizes. The log names the display's resolution at start-up.
+Fullscreen lists every resolution the display offers. Pick the display's own resolution (1280x800 on the Deck) in the game's options; a 16:9 resolution on a 16:10 display is still letterboxed by the display or by the Deck's scaler. Windowed mode only offers 16:9 sizes, so on the Deck only fullscreen fills the screen. The log names the display's resolution at start-up, and the original game's log names the fullscreen game area it uses.
 
-Steam Deck (Proton): set the game's launch options to `WINEDLLOVERRIDES="xinput1_3=n,b" %command%` so Wine loads this DLL instead of its own `xinput1_3`. Controller input is forwarded to Wine's `xinput1_4`; forwarding to `xinput1_3` would reach this DLL again.
+**Fullscreen frame rate.** Both games ask for a 60 Hz display mode in exclusive fullscreen and wait for vsync. On Windows that runs the screen at 60 Hz; on the Steam Deck, DXVK (which Proton uses for both games) caps a fullscreen game with vsync to the refresh rate of the mode it asked for, so Scholar stayed at 60 FPS in fullscreen even with the Deck at 90 Hz, while a window was not capped. With `FPSUnlock = true`, fullscreen now asks for your desktop's refresh rate (or `FullscreenRefreshRate`) and presents without waiting for vsync, in both games. Cap the frame rate with the Deck's frame limit or RTSS as usual.
+
+Steam Deck (Proton): set the game's launch options to `WINEDLLOVERRIDES="xinput1_3=n,b" %command%` so Wine loads this DLL instead of its own `xinput1_3` (or the option for the name you installed, see [DLL names](#dll-names)). Controller input is forwarded to Wine's `xinput1_4`; forwarding to `xinput1_3` would reach this DLL again. Version 1.1.0 forwarded to the system `xinput1_3`, which under Proton leaves the controller dead while the keyboard still works.
 
 ## Configuration
 
 `FPSUnlock = false` leaves the framerate and gameplay unchanged. `FixAspect` (above) is separate.
 
 `FPSUnlock = true` turns the whole fix on. The individual fixes have their own switches, all `true` by default: `GroundSnapFix`, `ForwardAttackFix` and `TaeEventFix` (described below), `ClothFix` (cloth stepped with the real frame time) and `DurabilityFix` (durability loss scaled to the frame time). `GroundSnapFix = false` falls back to the old jump workaround that never snaps. The original mod's names `JumpHeightFix` and `ClothSpeedFix` are also accepted.
+
+`FullscreenRefreshRate` (`[Display]`, default `0`) is the refresh rate exclusive fullscreen asks for with `FPSUnlock = true`: `0` is your desktop's own rate, a number asks for that rate. `ChainDll` (`[Loader]`, default empty) is another mod's DLL to pass this DLL's calls on to, see [DLL names](#dll-names).
 
 `PhysicsFPS` is the rate given to Havok as the expected maximum, 120 by default. Set it to your external cap. A 60 FPS frame is unchanged. Faster frames shorten the physics step and scale durability loss by `frameTime * 60` (clamped to 0.05–2), including hits from enemies, bosses, and other players, for weapons, armor, and rings.
 
@@ -68,7 +87,7 @@ Visual Studio 2022:
 build.bat
 ```
 
-`build\xinput1_3.dll` is Scholar. `build\vanilla\xinput1_3.dll` is the original game.
+`build\xinput1_3.dll` is Scholar. `build\vanilla\xinput1_3.dll` is the original game. The exports for the other DLL names are listed in `exports_x64.def` and `exports_x86.def`.
 
 ## License
 

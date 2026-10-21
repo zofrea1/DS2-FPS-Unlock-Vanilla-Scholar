@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string>
+
 struct Settings {
     bool fps_unlock = true;
     int physics_fps = 120;
@@ -19,6 +21,10 @@ struct Settings {
     // Fill the screen in exclusive fullscreen at any aspect ratio instead of a 16:9 picture between black bars.
     // Independent of fps_unlock.
     bool fix_aspect = true;
+    // Refresh rate exclusive fullscreen asks for (with fps_unlock). 0 = the desktop's own rate.
+    int fullscreen_refresh = 0;
+    // A DLL to forward to instead of the system DLL this one stands in for (proxy.h), UTF-8. Empty = none.
+    std::string chain_dll;
 };
 
 // Reads DS2-FPS-Unlock.ini from the same directory as the DLL.

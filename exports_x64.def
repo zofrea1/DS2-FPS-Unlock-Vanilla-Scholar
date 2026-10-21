@@ -1,0 +1,21 @@
+; Scholar of the First Sin (64-bit). The DLL can be named xinput1_3.dll, dxgi.dll or dinput8.dll (src/proxy.h).
+; The game imports XInputGetState and XInputSetState from xinput1_3.dll by ordinal, so those ordinals are fixed.
+EXPORTS
+    XInputGetState                   @2
+    XInputSetState                   @3
+    XInputGetCapabilities            @4
+    XInputEnable                     @5
+    XInputGetDSoundAudioDeviceGuids  @6
+    XInputGetBatteryInformation      @7
+    XInputGetKeystroke               @8
+    CreateDXGIFactory                = fwd_CreateDXGIFactory
+    CreateDXGIFactory1               = fwd_CreateDXGIFactory1
+    CreateDXGIFactory2               = fwd_CreateDXGIFactory2
+    DXGIGetDebugInterface1           = fwd_DXGIGetDebugInterface1
+    DXGIDeclareAdapterRemovalSupport = fwd_DXGIDeclareAdapterRemovalSupport
+    DirectInput8Create               = fwd_DirectInput8Create
+    DllCanUnloadNow                  = fwd_DllCanUnloadNow PRIVATE
+    DllGetClassObject                = fwd_DllGetClassObject PRIVATE
+    DllRegisterServer                = fwd_DllRegisterServer PRIVATE
+    DllUnregisterServer              = fwd_DllUnregisterServer PRIVATE
+    GetdfDIJoystick                  = fwd_GetdfDIJoystick

@@ -315,6 +315,22 @@ void __cdecl full_fit(int* width, int* height, int* top, int* left, int backbuff
     *height = backbuffer_h;
     *top = 0;
     *left = 0;
+    static int logged_w = 0;
+    static int logged_h = 0;
+    if (backbuffer_w != logged_w || backbuffer_h != logged_h) {
+        logged_w = backbuffer_w;
+        logged_h = backbuffer_h;
+        // The game's own fit: the largest centred 16:9 rectangle.
+        int fit_w = backbuffer_w;
+        int fit_h = backbuffer_h;
+        if (static_cast<long long>(backbuffer_w) * 9 > static_cast<long long>(backbuffer_h) * 16) {
+            fit_w = backbuffer_h * 16 / 9;
+        } else {
+            fit_h = backbuffer_w * 9 / 16;
+        }
+        LOG_INFO("FixAspect: fullscreen game area %dx%d (the game's 16:9 fit would be %dx%d)", backbuffer_w,
+                 backbuffer_h, fit_w, fit_h);
+    }
 }
 
 InlineHook g_sampler;

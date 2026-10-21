@@ -1,6 +1,7 @@
 #include "patches.h"
 
 #include "aspect.h"
+#include "dxgi_x64.h"
 #include "frame_fixes.h"
 #include "inline_hook.h"
 #include "jump_trace.h"
@@ -980,6 +981,7 @@ bool patches_apply(const Settings& settings) {
                      reinterpret_cast<void*>(&hk_frame_time));
     ok &= hook_named(g_update_hook, "hk_KatanaMainApp_UpdateDT", kUpdateDt, sizeof(kUpdateDt), 5,
                      reinterpret_cast<void*>(&hk_update));
+    ok &= dxgi_apply();
     ok &= settings.ground_snap_fix ? patch_snap() : patch_jump();
     if (jump_trace_enabled()) {
         ok &= patch_jump_trace();
@@ -1020,6 +1022,7 @@ bool patches_apply(const Settings& settings) {
 }
 
 void patches_remove() {
+    dxgi_remove();
     restore_code(g_aspect_setup);
     restore_code(g_aspect_resize);
     g_perspective.remove();

@@ -12,7 +12,7 @@ FILE* g_file = nullptr;
 std::mutex g_mu;
 }  // namespace
 
-void log_init(const wchar_t* dll_path) {
+void log_init(const wchar_t* dll_path, bool append) {
     wchar_t path[MAX_PATH];
     lstrcpynW(path, dll_path, MAX_PATH);
     wchar_t* slash = wcsrchr(path, L'\\');
@@ -23,7 +23,14 @@ void log_init(const wchar_t* dll_path) {
     }
     wchar_t full[MAX_PATH];
     _snwprintf_s(full, _TRUNCATE, L"%sDS2-FPS-Unlock.log", path);
-    g_file = _wfsopen(full, L"w", _SH_DENYNO);
+    // Emptied once, then written in append mode, so a second copy of the mod (dllmain.cpp) adds its lines at the
+    // end instead of being overwritten.
+    if (!append) {
+        if (FILE* fresh = _wfsopen(full, L"w", _SH_DENYNO)) {
+            std::fclose(fresh);
+        }
+    }
+    g_file = _wfsopen(full, L"a", _SH_DENYNO);
 }
 
 void log_write(const char* level, const char* fmt, ...) {

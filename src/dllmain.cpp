@@ -1,6 +1,8 @@
+#include "display.h"
 #include "jump_trace.h"
 #include "log.h"
 #include "patches.h"
+#include "proxy.h"
 #include "settings.h"
 
 #define WIN32_LEAN_AND_MEAN
@@ -8,26 +10,48 @@
 
 #include <cwchar>
 
-#pragma comment(lib, "user32.lib")
-
 namespace {
 
-// The desktop mode of the primary display, for the FixAspect log line. The game lists every fullscreen
-// mode the display offers, so the player picks the matching one in its options.
-void log_display_mode() {
-    DEVMODEW mode{};
-    mode.dmSize = sizeof(mode);
-    if (!EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &mode) || mode.dmPelsHeight == 0) {
-        return;
+// Wine and Proton (the Steam Deck) export wine_get_version from ntdll.
+void log_wine() {
+    using VersionFn = const char*(__cdecl*)();
+    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    auto version = ntdll ? reinterpret_cast<VersionFn>(GetProcAddress(ntdll, "wine_get_version")) : nullptr;
+    if (version) {
+        LOG_INFO("Running under Wine/Proton %s", version());
     }
-    const float aspect = static_cast<float>(mode.dmPelsWidth) / static_cast<float>(mode.dmPelsHeight);
-    const float wide = 16.0f / 9.0f;
-    if (aspect > wide - 0.01f && aspect < wide + 0.01f) {
-        LOG_INFO("   Display %lux%lu is 16:9", mode.dmPelsWidth, mode.dmPelsHeight);
-    } else {
-        LOG_INFO("   Display %lux%lu (%.3f): choose %lux%lu as the game's fullscreen resolution to fill it",
-                 mode.dmPelsWidth, mode.dmPelsHeight, aspect, mode.dmPelsWidth, mode.dmPelsHeight);
+}
+
+// The DLL's name decides which system DLL it stands in for (proxy.h). Wine only loads a DLL from the game folder
+// in place of its own when the launch options name it, e.g. WINEDLLOVERRIDES="xinput1_3=n,b" %command%.
+void log_proxy(ProxyKind kind) {
+    const char* name = proxy_file_name();
+    switch (kind) {
+    case ProxyKind::kXInput:
+        LOG_INFO("Loaded as %s: controller calls are forwarded to the system's XInput", name);
+        break;
+    case ProxyKind::kDxgi:
+    case ProxyKind::kD3d9:
+    case ProxyKind::kDinput8:
+        LOG_INFO("Loaded as %s: its calls are forwarded to the real %s; the game's xinput1_3.dll is its own", name,
+                 name);
+        break;
+    case ProxyKind::kOther:
+        LOG_INFO("Loaded as %s, which is not a name the game imports (%s). Fine when another mod loads this DLL; "
+                 "otherwise rename it to one of those",
+                 name, proxy_supported_names());
+        break;
     }
+}
+
+// Two copies of the mod under two names (an old xinput1_3.dll left next to a new dxgi.dll) would patch the game
+// twice. The first one loaded applies the mod; the other only passes its DLL's calls on. The mutex handle is kept
+// for the life of the process.
+bool first_copy() {
+    wchar_t name[64];
+    _snwprintf_s(name, _TRUNCATE, L"Local\\DS2-FPS-Unlock.%lu", GetCurrentProcessId());
+    HANDLE mutex = CreateMutexW(nullptr, FALSE, name);
+    return mutex && GetLastError() != ERROR_ALREADY_EXISTS;
 }
 
 bool filename_is_game(const wchar_t* path) {
@@ -39,11 +63,28 @@ bool filename_is_game(const wchar_t* path) {
 void startup(HMODULE self) {
     wchar_t dll_path[MAX_PATH];
     GetModuleFileNameW(self, dll_path, MAX_PATH);
-    log_init(dll_path);
-    LOG_INFO("DS2-FPS-Unlock v1.2.0");
-
+    const ProxyKind kind = proxy_init(self);
     wchar_t exe_path[MAX_PATH];
     GetModuleFileNameW(nullptr, exe_path, MAX_PATH);
+    // Another program in the game folder (a mod launcher) can load this DLL too. It only forwards there, and leaves
+    // the game's log alone.
+    if (!filename_is_game(exe_path)) {
+        return;
+    }
+    if (!first_copy()) {
+        log_init(dll_path, true);
+        LOG_ERROR("Another copy of DS2-FPS-Unlock is already loaded. This one (%s) only passes its DLL's calls "
+                  "on; delete one of the two DLLs.", proxy_file_name());
+        return;
+    }
+    log_init(dll_path);
+#if defined(_M_IX86)
+    const char* build = "32-bit, original game";
+#else
+    const char* build = "64-bit, Scholar of the First Sin";
+#endif
+    LOG_INFO("DS2-FPS-Unlock v1.2.0 (%s; built %s %s)", build, __DATE__, __TIME__);
+
     char exe_narrow[MAX_PATH];
     char dll_narrow[MAX_PATH];
     WideCharToMultiByte(CP_UTF8, 0, exe_path, -1, exe_narrow, MAX_PATH, nullptr, nullptr);
@@ -52,11 +93,8 @@ void startup(HMODULE self) {
     LOG_INFO("  File path: %s", exe_narrow);
     LOG_INFO("DLL module (base address: %p):", self);
     LOG_INFO("  File path: %s", dll_narrow);
-
-    if (!filename_is_game(exe_path)) {
-        LOG_ERROR("Plugin_Init: EXE filename %s doesn't match target filename DarkSoulsII.exe, exiting", exe_narrow);
-        return;
-    }
+    log_proxy(kind);
+    log_wine();
 #if defined(_M_IX86)
     LOG_INFO("Game detected: DS2");
 #else
@@ -73,9 +111,11 @@ void startup(HMODULE self) {
     LOG_INFO(" - ClothFix: %s", settings.cloth_fix ? "true" : "false");
     LOG_INFO(" - DurabilityFix: %s", settings.durability_fix ? "true" : "false");
     LOG_INFO(" - FixAspect: %s", settings.fix_aspect ? "true" : "false");
-    if (settings.fix_aspect) {
-        log_display_mode();
-    }
+    LOG_INFO(" - FullscreenRefreshRate: %d%s", settings.fullscreen_refresh,
+             settings.fullscreen_refresh > 0 ? "" : " (the desktop's)");
+    LOG_INFO(" - ChainDll: %s", settings.chain_dll.empty() ? "(none)" : settings.chain_dll.c_str());
+    proxy_set_chain(settings.chain_dll.c_str());
+    display_init(settings.fullscreen_refresh, settings.fix_aspect);
     if (settings.jump_trace) {
         const bool open = jump_trace_open(dll_path, settings.fps_unlock ? L"unlocked" : L"stock");
         LOG_INFO(" - JumpTrace: %s", open ? "writing DS2-FPS-Unlock-jumptrace-*.csv" : "could not open the CSV");
