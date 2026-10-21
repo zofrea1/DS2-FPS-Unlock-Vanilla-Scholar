@@ -4,6 +4,7 @@
 #include "frame_fixes.h"
 #include "inline_hook.h"
 #include "jump_trace.h"
+#include "limiter.h"
 #include "log.h"
 #include "present_x86.h"
 
@@ -63,8 +64,20 @@ void __cdecl publish_frame_dt(float dt) {
     g_dur_scale = scale;
 }
 
+// The game's 60 FPS sleep lived in this function, and the frame loop reads the pad after it returns.
+// Wait first, with the entry registers intact, then clear the sleep flag and run the original body.
 __declspec(naked) void hk_sampler() {
     __asm {
+        push ecx
+        push edx
+        push ebp
+        mov ebp, esp
+        and esp, -16
+        call limiter_wait
+        mov esp, ebp
+        pop ebp
+        pop edx
+        pop ecx
         mov byte ptr [esp + 4], 0
         jmp dword ptr [g_sampler_tramp]
     }

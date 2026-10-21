@@ -5,6 +5,7 @@
 #include "frame_fixes.h"
 #include "inline_hook.h"
 #include "jump_trace.h"
+#include "limiter.h"
 #include "log.h"
 
 #define WIN32_LEAN_AND_MEAN
@@ -316,8 +317,10 @@ float durability_scale() {
 }
 
 // Sum of the three smoothed slots, clamped to 1 second, is the real frame dt.
-// Calling through with limit=0 skips the Sleep that enforces 60 FPS.
+// The wait is the game's own 60 FPS sleep moved to the cap: it runs before this function samples the clock
+// and before the caller reads the pad. Calling through with limit=0 skips the game's Sleep.
 float __fastcall hk_frame_time(void* self, unsigned char /*limit*/) {
+    limiter_wait();
     auto* slots = static_cast<float*>(self);
     float sum = slots[0] + slots[1] + slots[2];
     if (sum > 1.0f) {

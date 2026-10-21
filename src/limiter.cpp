@@ -30,7 +30,7 @@ void ensure_timer() {
     if (!g_timer) {
         g_timer = CreateWaitableTimerExW(nullptr, nullptr, 0, kAccess);
     }
-    LOG_INFO("FPSLimit: %d (%.3f ms)%s", g_fps, 1000.0 / static_cast<double>(g_fps),
+    LOG_INFO("FPSLimit: %d (%.3f ms), before the frame step%s", g_fps, 1000.0 / static_cast<double>(g_fps),
              g_timer ? "" : ", sleeping without a waitable timer");
 }
 
