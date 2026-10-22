@@ -139,6 +139,7 @@ HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* self, UINT sync, UINT flags
             sync = 0;
         }
     }
+    limiter_wait_present();
     LARGE_INTEGER now{};
     QueryPerformanceCounter(&now);
     const HRESULT hr = present ? present(self, sync, flags) : E_FAIL;

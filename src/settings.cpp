@@ -75,6 +75,16 @@ Settings settings_load(const wchar_t* dll_path) {
             s.fps_unlock = parse_bool(val);
         } else if (key == "fpslimit") {
             s.fps_limit = std::atoi(val.c_str());
+        } else if (key == "fpslimitpoint") {
+            const std::string point = lower(val);
+            if (point == "present") {
+                s.fps_limit_early = false;
+            } else if (point == "early") {
+                s.fps_limit_early = true;
+            } else {
+                LOG_INFO("FPSLimitPoint \"%s\" is not early or present; using early", val.c_str());
+                s.fps_limit_early = true;
+            }
         } else if (key == "vsync") {
             s.vsync = parse_bool(val);
         } else if (key == "groundsnapfix" || key == "jumpheightfix") {

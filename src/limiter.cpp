@@ -13,6 +13,7 @@ namespace {
 
 // 0 while the limiter is off. The schedule is origin + index * frequency / fps, so the cap does not drift.
 int g_fps = 0;
+bool g_early = true;
 LONGLONG g_freq = 0;
 LONGLONG g_origin = 0;
 LONGLONG g_index = 0;
@@ -30,7 +31,8 @@ void ensure_timer() {
     if (!g_timer) {
         g_timer = CreateWaitableTimerExW(nullptr, nullptr, 0, kAccess);
     }
-    LOG_INFO("FPSLimit: %d (%.3f ms), before the frame step%s", g_fps, 1000.0 / static_cast<double>(g_fps),
+    LOG_INFO("FPSLimit: %d (%.3f ms), %s%s", g_fps, 1000.0 / static_cast<double>(g_fps),
+             g_early ? "before the frame step" : "before Present",
              g_timer ? "" : ", sleeping without a waitable timer");
 }
 
@@ -73,24 +75,7 @@ void sleep_until(LONGLONG target) {
     }
 }
 
-}  // namespace
-
-void limiter_start(int fps) {
-    limiter_stop();
-    if (fps <= 0) {
-        return;
-    }
-    LARGE_INTEGER freq{};
-    if (!QueryPerformanceFrequency(&freq) || freq.QuadPart <= 0) {
-        LOG_ERROR("FPSLimit: no performance counter, the cap is off");
-        return;
-    }
-    g_freq = freq.QuadPart;
-    g_fps = fps;
-    g_index = 0;
-}
-
-void limiter_wait() {
+void wait_for_slot() {
     if (g_fps <= 0 || g_freq <= 0) {
         return;
     }
@@ -114,6 +99,39 @@ void limiter_wait() {
     if (upcoming <= now.QuadPart) {
         g_origin = now.QuadPart;
         g_index = 1;
+    }
+}
+
+}  // namespace
+
+void limiter_start(int fps) {
+    limiter_stop();
+    if (fps <= 0) {
+        return;
+    }
+    LARGE_INTEGER freq{};
+    if (!QueryPerformanceFrequency(&freq) || freq.QuadPart <= 0) {
+        LOG_ERROR("FPSLimit: no performance counter, the cap is off");
+        return;
+    }
+    g_freq = freq.QuadPart;
+    g_fps = fps;
+    g_index = 0;
+}
+
+void limiter_set_early(bool early) {
+    g_early = early;
+}
+
+void limiter_wait() {
+    if (g_early) {
+        wait_for_slot();
+    }
+}
+
+void limiter_wait_present() {
+    if (!g_early) {
+        wait_for_slot();
     }
 }
 

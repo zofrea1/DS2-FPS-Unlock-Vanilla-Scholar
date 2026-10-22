@@ -146,6 +146,7 @@ void log_params(const char* what, const char* attempt, HRESULT hr, const D3DPRES
 
 HRESULT WINAPI hook_Present(IDirect3DDevice9* self, const RECT* source, const RECT* dest, HWND window,
                             const RGNDATA* dirty) {
+    limiter_wait_present();
     LARGE_INTEGER now{};
     QueryPerformanceCounter(&now);
     auto* present = reinterpret_cast<PresentFn>(g_present.original);

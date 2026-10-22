@@ -7,6 +7,8 @@ struct Settings {
     int physics_fps = 120;
     // Cap in frames per second after the game's own 60 FPS wait is removed. 0 leaves the framerate uncapped.
     int fps_limit = 0;
+    // true waits at the start of the frame, before the pad is read. false waits just before Present.
+    bool fps_limit_early = true;
     // Fullscreen presents immediately when fps_unlock is on. true waits for one vblank at fullscreen_refresh.
     bool vsync = false;
     // Release the body from the ground snap on the frames where 60 FPS would (ground_release in

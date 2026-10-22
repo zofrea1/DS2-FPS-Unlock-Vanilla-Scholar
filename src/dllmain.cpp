@@ -1,5 +1,6 @@
 #include "display.h"
 #include "jump_trace.h"
+#include "limiter.h"
 #include "log.h"
 #include "patches.h"
 #include "proxy.h"
@@ -83,7 +84,7 @@ void startup(HMODULE self) {
 #else
     const char* build = "64-bit, Scholar of the First Sin";
 #endif
-    LOG_INFO("DS2-FPS-Unlock v1.3.1 (%s; built %s %s)", build, __DATE__, __TIME__);
+    LOG_INFO("DS2-FPS-Unlock v1.3.2 (%s; built %s %s)", build, __DATE__, __TIME__);
 
     char exe_narrow[MAX_PATH];
     char dll_narrow[MAX_PATH];
@@ -105,7 +106,9 @@ void startup(HMODULE self) {
     LOG_INFO("Settings values:");
     LOG_INFO(" - FPSUnlock: %s", settings.fps_unlock ? "true" : "false");
     LOG_INFO(" - FPSLimit: %d%s", settings.fps_limit, settings.fps_limit > 0 ? "" : " (uncapped)");
+    LOG_INFO(" - FPSLimitPoint: %s", settings.fps_limit_early ? "early" : "present");
     LOG_INFO(" - VSync: %s", settings.vsync ? "true" : "false");
+    limiter_set_early(settings.fps_limit_early);
     LOG_INFO(" - PhysicsFPS: %d", settings.physics_fps);
     LOG_INFO(" - GroundSnapFix: %s", settings.ground_snap_fix ? "true" : "false");
     LOG_INFO(" - ForwardAttackFix: %s", settings.forward_attack_fix ? "true" : "false");
