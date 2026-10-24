@@ -6,3 +6,6 @@
 // process is not a supported DarkSoulsII.exe or a required pattern is missing.
 bool patches_apply(const Settings& settings);
 void patches_remove();
+// After the first Present, logs whether hook misses were a late unpack or another module.
+// A run where every pattern matched logs nothing here.
+void patches_log_runtime();

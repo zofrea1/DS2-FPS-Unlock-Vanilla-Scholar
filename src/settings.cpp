@@ -82,8 +82,8 @@ Settings settings_load(const wchar_t* dll_path) {
             } else if (point == "early") {
                 s.fps_limit_early = true;
             } else {
-                LOG_INFO("FPSLimitPoint \"%s\" is not early or present; using early", val.c_str());
-                s.fps_limit_early = true;
+                LOG_INFO("FPSLimitPoint \"%s\" is not early or present; using present", val.c_str());
+                s.fps_limit_early = false;
             }
         } else if (key == "vsync") {
             s.vsync = parse_bool(val);

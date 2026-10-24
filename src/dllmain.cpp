@@ -84,7 +84,7 @@ void startup(HMODULE self) {
 #else
     const char* build = "64-bit, Scholar of the First Sin";
 #endif
-    LOG_INFO("DS2-FPS-Unlock v1.3.2 (%s; built %s %s)", build, __DATE__, __TIME__);
+    LOG_INFO("DS2-FPS-Unlock v1.3.4 (%s; built %s %s)", build, __DATE__, __TIME__);
 
     char exe_narrow[MAX_PATH];
     char dll_narrow[MAX_PATH];

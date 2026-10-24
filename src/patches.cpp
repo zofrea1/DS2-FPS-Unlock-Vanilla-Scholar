@@ -10,6 +10,7 @@
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <tlhelp32.h>
 
 #include <atomic>
 #include <cmath>
@@ -50,6 +51,14 @@ const uint8_t kWorldCtor[] = {
 const uint8_t kCloth[] = {
     0x40, 0x55, 0x48, 0x83, 0xEC, 0x40, 0x0F, 0x29, 0x74, 0x24, 0x30, 0x0F, 0x57, 0xC0, 0x0F, 0x28,
     0xF1, 0x48, 0x8B, 0xE9, 0x0F, 0x2F, 0xF0, 0x0F};
+// RVAs on the Steam exe timestamped 1663233821. A miss logs these bytes. The frame site is hooked
+// here only when the prologue actually matches, so a different image is left alone.
+constexpr uint32_t kFrameTimeRva = 0xB4A380;
+constexpr uint32_t kUpdateDtRva = 0xAF0090;
+constexpr uint32_t kWorldCtorRva = 0x6EE410;
+constexpr uint32_t kClothRva = 0xBC42A0;
+// ChrPhysicalProxy ground-snap site. Verified on timestamp 1663233821: the bytes are the masked pattern.
+constexpr uint32_t kSnapSiteRva = 0x36DEA7;
 // Unique bytes around the jump-ray je. The 0x74 sits 8 bytes in.
 const uint8_t kJump[] = {
     0xCE, 0xE8, 0x31, 0x1B, 0x00, 0x00, 0x84, 0xC0, 0x74, 0x13, 0x4C, 0x8D, 0x45, 0x80, 0x48, 0x8D};
@@ -286,6 +295,22 @@ uint8_t* find_unique(const uint8_t* pat, size_t n, const char* name, const char*
     return found;
 }
 
+bool in_executable(const uint8_t* p, size_t n) {
+    for (const Section& s : code_sections()) {
+        const uint8_t* begin = s.start;
+        const uint8_t* end = s.start + s.size;
+        if (p >= begin && p + n <= end) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Defined in hook_diag.inc. A missed hook logs the image, the file bytes, and the memory bytes so a
+// Steam Deck run shows why the pattern was absent.
+void diagnose_miss(const char* name, const uint8_t* pat, size_t n, const char* mask, uint32_t known_rva);
+void diag_set_control(const char* name, const void* site, const uint8_t* original, size_t n);
+
 DWORD exe_timestamp() {
     auto base = reinterpret_cast<uint8_t*>(GetModuleHandleW(nullptr));
     auto dos = reinterpret_cast<IMAGE_DOS_HEADER*>(base);
@@ -471,10 +496,11 @@ void unpatch_tae() {
 }
 
 bool hook_named(InlineHook& hook, const char* name, const uint8_t* pat, size_t pat_len, size_t stolen, void* detour,
-                const char* mask = nullptr) {
+                const char* mask = nullptr, uint32_t known_rva = 0) {
     uint8_t* site = find_unique(pat, pat_len, name, mask);
     if (!site) {
         LOG_ERROR("%s: apply failed", name);
+        diagnose_miss(name, pat, pat_len, mask, known_rva);
         return false;
     }
     if (!hook.install(site, detour, stolen)) {
@@ -587,6 +613,9 @@ bool patch_vert_plus() {
 bool patch_aspect() {
     bool ok = write_code(g_aspect_setup, kAspectSetup, sizeof(kAspectSetup), kAspectSetupMask, kAspectSetupAt,
                          kAspectSetupFull, sizeof(kAspectSetupFull), "pch_Screen_FullscreenAspect_Setup");
+    if (g_aspect_setup.site && g_aspect_setup.n > 0) {
+        diag_set_control("aspect", g_aspect_setup.site, g_aspect_setup.original, g_aspect_setup.n);
+    }
     ok &= write_code(g_aspect_resize, kAspectResize, sizeof(kAspectResize), kAspectResizeMask, kAspectResizeAt,
                      kAspectResizeFull, sizeof(kAspectResizeFull), "pch_Screen_FullscreenAspect_Resize");
     ok &= patch_vert_plus();
@@ -778,6 +807,7 @@ bool patch_snap() {
     uint8_t* hit = find_unique(kSnapSite, sizeof(kSnapSite), kName, kSnapMask);
     if (!hit) {
         LOG_ERROR("%s: apply failed", kName);
+        diagnose_miss(kName, kSnapSite, sizeof(kSnapSite), kSnapMask, kSnapSiteRva);
         return false;
     }
     uint8_t* call = hit + 23;
@@ -947,6 +977,32 @@ void remove_ring_rate() {
     g_scale_slot = nullptr;
 }
 
+#include "hook_diag.inc"
+
+// The early cap waits on the first line of this hook, which is also what turns off the game's own 60 FPS
+// sleep. A Steam Deck image with the known timestamp can miss the prologue while Present still hooks.
+// Fullscreen vsync is then forced off, and the Deck compositor is the only cap left. Hook the known RVA
+// when it really is this prologue.
+bool install_frame_hook() {
+    constexpr const char* kName = "hk_MainAppFrameTimeInfo_UnlockDeltatime";
+    uint8_t* site = find_unique(kFrameTime, sizeof(kFrameTime), kName);
+    if (!site) {
+        uint8_t* known = reinterpret_cast<uint8_t*>(GetModuleHandleW(nullptr)) + kFrameTimeRva;
+        if (in_executable(known, sizeof(kFrameTime)) &&
+            bytes_match(known, kFrameTime, nullptr, sizeof(kFrameTime))) {
+            LOG_INFO("%s: scanner missed the known site at RVA 0x%X", kName, kFrameTimeRva);
+            site = known;
+        }
+    }
+    if (!site || !g_frame_hook.install(site, reinterpret_cast<void*>(&hk_frame_time), 5)) {
+        LOG_ERROR("%s: apply failed", kName);
+        diagnose_miss(kName, kFrameTime, sizeof(kFrameTime), nullptr, kFrameTimeRva);
+        return false;
+    }
+    LOG_INFO("%s: apply successful", kName);
+    return true;
+}
+
 }  // namespace
 
 bool patches_apply(const Settings& settings) {
@@ -980,10 +1036,17 @@ bool patches_apply(const Settings& settings) {
         return false;
     }
 
-    ok &= hook_named(g_frame_hook, "hk_MainAppFrameTimeInfo_UnlockDeltatime", kFrameTime, sizeof(kFrameTime), 5,
-                     reinterpret_cast<void*>(&hk_frame_time));
+    const bool frame_ok = install_frame_hook();
+    ok &= frame_ok;
+    // Early waits inside the frame-time hook. When that hook is missing, the Present hook below is the
+    // remaining wait. That hook also turns fullscreen vsync off, so the framerate is uncapped once the
+    // Deck's own limiter is turned off.
+    if (!frame_ok && settings.fps_limit > 0 && settings.fps_limit_early) {
+        limiter_set_early(false);
+        LOG_INFO("FPSLimitPoint early: the frame-step wait was not found, so FPSLimit waits before Present");
+    }
     ok &= hook_named(g_update_hook, "hk_KatanaMainApp_UpdateDT", kUpdateDt, sizeof(kUpdateDt), 5,
-                     reinterpret_cast<void*>(&hk_update));
+                     reinterpret_cast<void*>(&hk_update), nullptr, kUpdateDtRva);
     ok &= dxgi_apply(settings.vsync, settings.fps_limit);
     ok &= settings.ground_snap_fix ? patch_snap() : patch_jump();
     if (jump_trace_enabled()) {
@@ -1015,11 +1078,11 @@ bool patches_apply(const Settings& settings) {
     }
     if (settings.physics_fps > 0) {
         ok &= hook_named(g_world_hook, "hk_hkpWorld_UpdateExpectedDeltaTime", kWorldCtor, sizeof(kWorldCtor), 7,
-                         reinterpret_cast<void*>(&hk_world));
+                         reinterpret_cast<void*>(&hk_world), nullptr, kWorldCtorRva);
     }
     if (settings.cloth_fix) {
         ok &= hook_named(g_cloth_hook, "hk_PXClothWorld_FrametimeUpdate", kCloth, sizeof(kCloth), 6,
-                         reinterpret_cast<void*>(&hk_cloth));
+                         reinterpret_cast<void*>(&hk_cloth), nullptr, kClothRva);
     }
     return ok;
 }
@@ -1043,6 +1106,10 @@ void patches_remove() {
     unpatch_jump();
     unpatch_snap();
     g_proxy_update.remove();
+}
+
+void patches_log_runtime() {
+    diag_runtime();
 }
 
 #endif  // _M_X64

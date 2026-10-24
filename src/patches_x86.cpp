@@ -10,6 +10,7 @@
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <tlhelp32.h>
 
 #include <cmath>
 #include <cstdint>
@@ -131,6 +132,18 @@ __declspec(naked) void hk_dur_ring() {
 namespace {
 
 constexpr DWORD kVanillaStamp = 1665659056;
+// Single hits in the Steam exe of that timestamp. Armor, stick, TAE, aspect, and the proxy update
+// were not confirmed as one site, so those misses search the image without a saved address.
+constexpr uint32_t kSamplerRva = 0xA4A330;
+constexpr uint32_t kPacerRva = 0xB41540;
+constexpr uint32_t kStepRva = 0x9F7F60;
+constexpr uint32_t kMeasuredRva = 0x9F82FB;
+constexpr uint32_t kClampRva = 0xA4A5D7;
+constexpr uint32_t kDurWeaponRva = 0x26BE10;
+constexpr uint32_t kDurRingRva = 0x26C8D0;
+constexpr uint32_t kSnapRva = 0x397AD5;
+constexpr uint32_t kWorldRva = 0x7E5A60;
+constexpr uint32_t kClothRva = 0xAAFF48;
 
 void __stdcall hk_pacer(void* a, void* b, void* c) {
     (void)a;
@@ -430,10 +443,17 @@ DWORD exe_timestamp() {
     return nt->FileHeader.TimeDateStamp;
 }
 
+#include "hook_diag.inc"
+
 bool hook_named(InlineHook& hook, void** tramp, const char* name, const uint8_t* pat, size_t n, size_t stolen,
-                void* detour, const char* mask = nullptr) {
+                void* detour, const char* mask = nullptr, uint32_t known_rva = 0) {
     uint8_t* site = find_unique(pat, n, name, mask);
-    if (!site || !hook.install(site, detour, stolen)) {
+    if (!site) {
+        LOG_ERROR("%s: apply failed", name);
+        diagnose_miss(name, pat, n, mask, known_rva);
+        return false;
+    }
+    if (!hook.install(site, detour, stolen)) {
         LOG_ERROR("%s: apply failed", name);
         return false;
     }
@@ -445,10 +465,11 @@ bool hook_named(InlineHook& hook, void** tramp, const char* name, const uint8_t*
 }
 
 bool patch_byte(BytePatch& patch, const uint8_t* pat, size_t n, size_t index, uint8_t expect, uint8_t value,
-                const char* name) {
+                const char* name, uint32_t known_rva = 0) {
     uint8_t* hit = find_unique(pat, n, name);
     if (!hit) {
         LOG_ERROR("%s: apply failed", name);
+        diagnose_miss(name, pat, n, nullptr, known_rva);
         return false;
     }
     uint8_t* site = hit + index;
@@ -504,8 +525,14 @@ bool write_span(SpanPatch& patch, uint8_t* site, const uint8_t* replacement, siz
 }
 
 bool patch_span(SpanPatch& patch, const uint8_t* pat, size_t n, const char* mask, const uint8_t* replacement,
-                size_t replace_n, const char* name) {
-    return write_span(patch, find_unique(pat, n, name, mask), replacement, replace_n, name);
+                size_t replace_n, const char* name, uint32_t known_rva = 0) {
+    uint8_t* site = find_unique(pat, n, name, mask);
+    if (!site) {
+        LOG_ERROR("%s: apply failed", name);
+        diagnose_miss(name, pat, n, mask, known_rva);
+        return false;
+    }
+    return write_span(patch, site, replacement, replace_n, name);
 }
 
 // jmp full_fit over the start of the fit helper. Nothing returns into the rest of it.
@@ -514,12 +541,17 @@ bool patch_aspect() {
     uint8_t* site = find_unique(kAspectFit, sizeof(kAspectFit), kName, kAspectFitMask);
     if (!site) {
         LOG_ERROR("%s: apply failed", kName);
+        diagnose_miss(kName, kAspectFit, sizeof(kAspectFit), kAspectFitMask, 0);
         return false;
     }
     uint8_t jmp[5] = {0xE9};
     const int32_t rel = static_cast<int32_t>(reinterpret_cast<intptr_t>(&full_fit) - reinterpret_cast<intptr_t>(site + 5));
     std::memcpy(jmp + 1, &rel, sizeof(rel));
-    return write_span(g_aspect_fit, site, jmp, sizeof(jmp), kName);
+    const bool wrote = write_span(g_aspect_fit, site, jmp, sizeof(jmp), kName);
+    if (wrote) {
+        diag_set_control("aspect", g_aspect_fit.site, g_aspect_fit.original, g_aspect_fit.n);
+    }
+    return wrote;
 }
 
 void restore_span(SpanPatch& patch) {
@@ -706,7 +738,12 @@ bool patch_jump_trace() {
         return false;
     }
     uint8_t* site = find_unique(kProxyUpdate, sizeof(kProxyUpdate), kName, kProxyUpdateMask);
-    if (!site || !g_proxy_update.install(site, reinterpret_cast<void*>(&hk_proxy_update), 6)) {
+    if (!site) {
+        LOG_ERROR("%s: apply failed", kName);
+        diagnose_miss(kName, kProxyUpdate, sizeof(kProxyUpdate), kProxyUpdateMask, 0);
+        return false;
+    }
+    if (!g_proxy_update.install(site, reinterpret_cast<void*>(&hk_proxy_update), 6)) {
         LOG_ERROR("%s: apply failed", kName);
         return false;
     }
@@ -719,6 +756,7 @@ bool patch_snap() {
     uint8_t* hit = find_unique(kSnapSite, sizeof(kSnapSite), kName, kSnapMask);
     if (!hit) {
         LOG_ERROR("%s: apply failed", kName);
+        diagnose_miss(kName, kSnapSite, sizeof(kSnapSite), kSnapMask, kSnapRva);
         return false;
     }
     uint8_t* call = hit + 21;
@@ -792,6 +830,7 @@ bool patch_tae() {
     uint8_t* site = find_unique(kTaeDispatch, sizeof(kTaeDispatch), kName);
     if (!site) {
         LOG_ERROR("%s: apply failed", kName);
+        diagnose_miss(kName, kTaeDispatch, sizeof(kTaeDispatch), nullptr, 0);
         return false;
     }
     uint8_t* call = site + kTaeHandlerCallAt;
@@ -972,6 +1011,12 @@ T absolute_operand(const uint8_t* at) {
 bool patch_vert_plus() {
     uint8_t* app_ref = find_unique(kMainAppRef, sizeof(kMainAppRef), "hk_Perspective_VertPlus", kMainAppRefMask);
     uint8_t* pick = find_unique(kTargetPick, sizeof(kTargetPick), "hk_TargetPick_VertPlus", kTargetPickMask);
+    if (!app_ref) {
+        diagnose_miss("hk_Perspective_VertPlus", kMainAppRef, sizeof(kMainAppRef), kMainAppRefMask, 0);
+    }
+    if (!pick) {
+        diagnose_miss("hk_TargetPick_VertPlus", kTargetPick, sizeof(kTargetPick), kTargetPickMask, 0);
+    }
     if (!app_ref || !pick) {
         LOG_ERROR("hk_Perspective_VertPlus: apply failed");
         return false;
@@ -1030,26 +1075,27 @@ bool patches_apply(const Settings& settings) {
     }
 
     ok &= hook_named(g_sampler, &g_sampler_tramp, "hk_MainAppFrameTimeInfo_UnlockDeltatime", kSampler,
-                     sizeof(kSampler), 6, reinterpret_cast<void*>(&hk_sampler));
+                     sizeof(kSampler), 6, reinterpret_cast<void*>(&hk_sampler), nullptr, kSamplerRva);
     ok &= hook_named(g_pacer, nullptr, "hk_FramePacer_Disable", kPacer, sizeof(kPacer), 6,
-                     reinterpret_cast<void*>(&hk_pacer));
+                     reinterpret_cast<void*>(&hk_pacer), nullptr, kPacerRva);
     ok &= hook_named(g_step, &g_step_tramp, "hk_KatanaMainApp_UpdateDT", kStep, sizeof(kStep), 6,
-                     reinterpret_cast<void*>(&hk_step), kStepMask);
-    ok &= patch_byte(g_measured, kMeasured, sizeof(kMeasured), 7, 0x74, 0xEB, "pch_UseMeasuredDeltatime");
-    ok &= patch_byte(g_clamp, kClamp, sizeof(kClamp), 4, 0x08, 0xFC, "pch_FrameDeltaMinClamp");
+                     reinterpret_cast<void*>(&hk_step), kStepMask, kStepRva);
+    ok &= patch_byte(g_measured, kMeasured, sizeof(kMeasured), 7, 0x74, 0xEB, "pch_UseMeasuredDeltatime",
+                     kMeasuredRva);
+    ok &= patch_byte(g_clamp, kClamp, sizeof(kClamp), 4, 0x08, 0xFC, "pch_FrameDeltaMinClamp", kClampRva);
     ok &= present_apply(settings.vsync, settings.fps_limit);
     if (settings.durability_fix) {
         ok &= hook_named(g_dur_weapon, &g_dur_weapon_tramp, "hk_Durability_Weapon", kDurWeapon, sizeof(kDurWeapon), 6,
-                         reinterpret_cast<void*>(&hk_dur_weapon));
+                         reinterpret_cast<void*>(&hk_dur_weapon), nullptr, kDurWeaponRva);
         ok &= hook_named(g_dur_armor, &g_dur_armor_tramp, "hk_Durability_Armor", kDurArmor, sizeof(kDurArmor), 6,
                          reinterpret_cast<void*>(&hk_dur_armor));
         ok &= hook_named(g_dur_ring, &g_dur_ring_tramp, "hk_Durability_RingOnHit", kDurRing, sizeof(kDurRing), 8,
-                         reinterpret_cast<void*>(&hk_dur_ring), kDurRingMask);
+                         reinterpret_cast<void*>(&hk_dur_ring), kDurRingMask, kDurRingRva);
     }
     if (settings.ground_snap_fix) {
         ok &= patch_snap();
     } else {
-        ok &= patch_byte(g_jump, kJump, sizeof(kJump), 9, 0x74, 0xEB, "pch_ChrPhysicalProxy_JumpHeightFix");
+        ok &= patch_byte(g_jump, kJump, sizeof(kJump), 9, 0x74, 0xEB, "pch_ChrPhysicalProxy_JumpHeightFix", kSnapRva);
     }
     if (jump_trace_enabled()) {
         ok &= patch_jump_trace();
@@ -1063,14 +1109,18 @@ bool patches_apply(const Settings& settings) {
     }
     if (settings.cloth_fix) {
         ok &= patch_span(g_cloth, kCloth, sizeof(kCloth), kClothMask, kClothReplacement,
-                         sizeof(kClothReplacement), "hk_PXClothWorld_FrametimeUpdate");
+                         sizeof(kClothReplacement), "hk_PXClothWorld_FrametimeUpdate", kClothRva);
     }
     if (settings.physics_fps > 0) {
         g_physics_dt = 1.0f / static_cast<float>(settings.physics_fps);
         ok &= hook_named(g_world, &g_world_tramp, "hk_hkpWorld_UpdateExpectedDeltaTime", kWorld, sizeof(kWorld), 6,
-                         reinterpret_cast<void*>(&hk_world), kWorldMask);
+                         reinterpret_cast<void*>(&hk_world), kWorldMask, kWorldRva);
     }
     return ok;
+}
+
+void patches_log_runtime() {
+    diag_runtime();
 }
 
 void patches_remove() {

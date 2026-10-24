@@ -4,6 +4,7 @@
 #include "iat.h"
 #include "limiter.h"
 #include "log.h"
+#include "patches.h"
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -146,6 +147,7 @@ void log_params(const char* what, const char* attempt, HRESULT hr, const D3DPRES
 
 HRESULT WINAPI hook_Present(IDirect3DDevice9* self, const RECT* source, const RECT* dest, HWND window,
                             const RGNDATA* dirty) {
+    patches_log_runtime();
     limiter_wait_present();
     LARGE_INTEGER now{};
     QueryPerformanceCounter(&now);

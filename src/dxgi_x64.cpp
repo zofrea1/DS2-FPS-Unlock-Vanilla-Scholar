@@ -4,6 +4,7 @@
 #include "iat.h"
 #include "limiter.h"
 #include "log.h"
+#include "patches.h"
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -123,6 +124,7 @@ void restart_present_stats() {
 }
 
 HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* self, UINT sync, UINT flags) {
+    patches_log_runtime();
     auto present = reinterpret_cast<PresentFn>(original_for(self, kPresent));
     BOOL fullscreen = FALSE;
     if (FAILED(self->GetFullscreenState(&fullscreen, nullptr))) {
