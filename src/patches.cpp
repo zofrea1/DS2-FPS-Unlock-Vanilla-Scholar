@@ -980,9 +980,9 @@ void remove_ring_rate() {
 #include "hook_diag.inc"
 
 // The early cap waits on the first line of this hook, which is also what turns off the game's own 60 FPS
-// sleep. A Steam Deck image with the known timestamp can miss the prologue while Present still hooks.
-// Fullscreen vsync is then forced off, and the Deck compositor is the only cap left. Hook the known RVA
-// when it really is this prologue.
+// sleep. A Steam Deck image with the known timestamp can miss the prologue while Present still hooks; the
+// early cap then waits before Present instead (patches_apply). Hook the known RVA when it really is this
+// prologue.
 bool install_frame_hook() {
     constexpr const char* kName = "hk_MainAppFrameTimeInfo_UnlockDeltatime";
     uint8_t* site = find_unique(kFrameTime, sizeof(kFrameTime), kName);
@@ -1039,8 +1039,7 @@ bool patches_apply(const Settings& settings) {
     const bool frame_ok = install_frame_hook();
     ok &= frame_ok;
     // Early waits inside the frame-time hook. When that hook is missing, the Present hook below is the
-    // remaining wait. That hook also turns fullscreen vsync off, so the framerate is uncapped once the
-    // Deck's own limiter is turned off.
+    // remaining wait, so FPSLimit still holds once the Deck's own limiter is turned off. VSync stays as set.
     if (!frame_ok && settings.fps_limit > 0 && settings.fps_limit_early) {
         limiter_set_early(false);
         LOG_INFO("FPSLimitPoint early: the frame-step wait was not found, so FPSLimit waits before Present");

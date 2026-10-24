@@ -100,22 +100,33 @@ void patch_slot(void* object, int index, void* detour, const char* name) {
     ReleaseSRWLockExclusive(&g_slot_lock);
 }
 
-// A fullscreen request below the target rate is raised to it. An unspecified rate (0) is left to DXGI, which
-// takes the desktop's (DXVK does).
-void raise_refresh(DXGI_RATIONAL& rate, const char* where) {
+// A fullscreen request below the target rate is raised to it; returns whether it was. An unspecified rate (0) is
+// left to DXGI, which takes the desktop's (DXVK does). A windowed description is raised too: Scholar creates its
+// swap chain windowed and then goes fullscreen, and the mode it enters takes the rate given at creation (DXVK's
+// fullscreen description), so that rate is the one DXVK caps a vsynced fullscreen picture to.
+bool raise_refresh(DXGI_RATIONAL& rate, const char* where) {
     const unsigned target = display_fullscreen_hz();
     if (!target || !rate.Numerator || !rate.Denominator) {
-        return;
+        return false;
     }
     const double hz = static_cast<double>(rate.Numerator) / static_cast<double>(rate.Denominator);
     if (hz + 0.5 >= static_cast<double>(target)) {
-        return;
+        return false;
     }
     if (InterlockedIncrement(&g_refresh_logs) <= 16) {
         LOG_INFO("%s: fullscreen refresh %.2f Hz -> %u Hz", where, hz, target);
     }
     rate.Numerator = target;
     rate.Denominator = 1;
+    return true;
+}
+
+// DXGI and DXVK pick the closest mode the display offers rather than refusing a rate, but should a call with the
+// raised rate still fail, it is made again with the game's own, as the original game's Direct3D 9 path falls back.
+void log_refresh_retry(const char* where, HRESULT hr, const DXGI_RATIONAL& rate) {
+    LOG_INFO("%s with the raised refresh failed (hr=0x%08X); trying the game's %u/%u (set FullscreenRefreshRate to a "
+             "rate the display offers)",
+             where, static_cast<unsigned>(hr), rate.Numerator, rate.Denominator);
 }
 
 void restart_present_stats() {
@@ -174,8 +185,13 @@ HRESULT STDMETHODCALLTYPE hk_ResizeTarget(IDXGISwapChain* self, const DXGI_MODE_
         return resize(self, mode);
     }
     DXGI_MODE_DESC copy = *mode;
-    raise_refresh(copy.RefreshRate, "ResizeTarget");
-    const HRESULT hr = resize(self, &copy);
+    const bool raised = raise_refresh(copy.RefreshRate, "ResizeTarget");
+    HRESULT hr = resize(self, &copy);
+    if (FAILED(hr) && raised) {
+        log_refresh_retry("ResizeTarget", hr, mode->RefreshRate);
+        copy = *mode;
+        hr = resize(self, &copy);
+    }
     LOG_INFO("ResizeTarget %ux%u @ %u/%u hr=0x%08X", copy.Width, copy.Height, copy.RefreshRate.Numerator,
              copy.RefreshRate.Denominator, static_cast<unsigned>(hr));
     restart_present_stats();
@@ -200,8 +216,13 @@ HRESULT STDMETHODCALLTYPE hk_CreateSwapChain(IDXGIFactory* self, IUnknown* devic
         return create(self, device, desc, out);
     }
     DXGI_SWAP_CHAIN_DESC copy = *desc;
-    raise_refresh(copy.BufferDesc.RefreshRate, "CreateSwapChain");
-    const HRESULT hr = create(self, device, &copy, out);
+    const bool raised = raise_refresh(copy.BufferDesc.RefreshRate, "CreateSwapChain");
+    HRESULT hr = create(self, device, &copy, out);
+    if (FAILED(hr) && raised) {
+        log_refresh_retry("CreateSwapChain", hr, desc->BufferDesc.RefreshRate);
+        copy = *desc;
+        hr = create(self, device, &copy, out);
+    }
     LOG_INFO("CreateSwapChain hr=0x%08X windowed=%d %ux%u @ %u/%u (asked %u/%u) swap=%u buffers=%u flags=0x%X",
              static_cast<unsigned>(hr), copy.Windowed, copy.BufferDesc.Width, copy.BufferDesc.Height,
              copy.BufferDesc.RefreshRate.Numerator, copy.BufferDesc.RefreshRate.Denominator,
@@ -223,12 +244,18 @@ HRESULT STDMETHODCALLTYPE hk_CreateSwapChainForHwnd(IDXGIFactory2* self, IUnknow
     }
     DXGI_SWAP_CHAIN_FULLSCREEN_DESC copy{};
     const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* use = fullscreen;
+    bool raised = false;
     if (fullscreen) {
         copy = *fullscreen;
-        raise_refresh(copy.RefreshRate, "CreateSwapChainForHwnd");
+        raised = raise_refresh(copy.RefreshRate, "CreateSwapChainForHwnd");
         use = &copy;
     }
-    const HRESULT hr = create(self, device, window, desc, use, output, out);
+    HRESULT hr = create(self, device, window, desc, use, output, out);
+    if (FAILED(hr) && raised) {
+        log_refresh_retry("CreateSwapChainForHwnd", hr, fullscreen->RefreshRate);
+        use = fullscreen;
+        hr = create(self, device, window, desc, use, output, out);
+    }
     LOG_INFO("CreateSwapChainForHwnd hr=0x%08X windowed=%d", static_cast<unsigned>(hr), use ? use->Windowed : 1);
     if (SUCCEEDED(hr) && out && *out) {
         hook_swap_chain(*out);
