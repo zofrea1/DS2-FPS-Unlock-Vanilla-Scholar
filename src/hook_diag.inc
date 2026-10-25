@@ -388,6 +388,71 @@ void log_diag_header(const ExeMap& exe) {
     }
 }
 
+// Where a jump at `p` (bytes `code`, `n` of them) goes: E9 rel32, FF 25 (an indirect jump through a slot),
+// x64 mov rax,imm64 + jmp rax, x86 push imm32 + ret. 0 when the bytes are not one of those.
+uintptr_t jump_target(const uint8_t* p, const uint8_t* code, size_t n) {
+    uintptr_t target = 0;
+    if (n >= 5 && code[0] == 0xE9) {
+        int32_t rel = 0;
+        std::memcpy(&rel, code + 1, sizeof(rel));
+        target = reinterpret_cast<uintptr_t>(p) + 5 + static_cast<intptr_t>(rel);
+    } else if (n >= 6 && code[0] == 0xFF && code[1] == 0x25) {
+        int32_t disp = 0;
+        std::memcpy(&disp, code + 2, sizeof(disp));
+#if defined(_M_X64)
+        const uint8_t* slot = p + 6 + disp;
+#else
+        const auto* slot = reinterpret_cast<const uint8_t*>(static_cast<uintptr_t>(static_cast<uint32_t>(disp)));
+#endif
+        uint8_t raw[sizeof(uintptr_t)]{};
+        if (copy_mem(slot, raw, sizeof(raw)) == sizeof(raw)) {
+            std::memcpy(&target, raw, sizeof(target));
+        }
+#if defined(_M_X64)
+    } else if (n >= 12 && code[0] == 0x48 && code[1] == 0xB8 && code[10] == 0xFF && code[11] == 0xE0) {
+        std::memcpy(&target, code + 2, sizeof(target));
+#else
+    } else if (n >= 6 && code[0] == 0x68 && code[5] == 0xC3) {
+        uint32_t imm = 0;
+        std::memcpy(&imm, code + 1, sizeof(imm));
+        target = imm;
+#endif
+    }
+    return target;
+}
+
+// A site that starts with a jump the game's file does not have was hooked by something loaded before this mod.
+// The jump is followed (through a relay page, as hooking libraries place one) to the DLL it lands in.
+void log_jump_owner(const char* name, const uint8_t* site, const uint8_t* mem, size_t n) {
+    const uint8_t* at = site;
+    uintptr_t target = jump_target(at, mem, n);
+    for (int hop = 0; target != 0 && hop < 3; ++hop) {
+        HMODULE owner = nullptr;
+        if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                               reinterpret_cast<LPCWSTR>(target), &owner) &&
+            owner != GetModuleHandleW(nullptr)) {
+            wchar_t wide[MAX_PATH] = L"";
+            GetModuleFileNameW(owner, wide, MAX_PATH);
+            char path[MAX_PATH];
+            WideCharToMultiByte(CP_UTF8, 0, wide, -1, path, MAX_PATH, nullptr, nullptr);
+            LOG_ERROR("%s: the game's code here already jumps into %s. Another mod has hooked it before this one; "
+                      "remove that mod (two frame-rate mods cannot share the game's frame code)",
+                      name, path);
+            return;
+        }
+        // Not in a DLL: a relay page. Follow its own jump.
+        uint8_t relay[16];
+        at = reinterpret_cast<const uint8_t*>(target);
+        const size_t got = copy_mem(at, relay, sizeof(relay));
+        target = jump_target(at, relay, got);
+    }
+    if (target != 0 || at != site) {
+        LOG_ERROR("%s: the game's code here already jumps elsewhere (%p): something loaded before this mod has "
+                  "hooked it",
+                  name, static_cast<const void*>(at));
+    }
+}
+
 void diagnose_miss(const char* name, const uint8_t* pat, size_t n, const char* mask, uint32_t known_rva) {
     g_diag_needed = true;
     ExeMap exe;
@@ -414,6 +479,9 @@ void diagnose_miss(const char* name, const uint8_t* pat, size_t n, const char* m
         const size_t both = mem_n < file_n ? mem_n : file_n;
         const bool same = both > 0 && mem_n == file_n && std::memcmp(mem, fileb, both) == 0;
         LOG_INFO("diag %s RVA 0x%X %s", name, known_rva, same ? "mem==file" : "mem!=file");
+        if (!same && mem_n != 0 && jump_target(site, mem, mem_n) != jump_target(site, fileb, file_n)) {
+            log_jump_owner(name, site, mem, mem_n);
+        }
         if (mem_n >= n) {
             LOG_INFO("diag %s memory pattern prefix %zu/%zu", name, prefix_match(mem, pat, mask, n), n);
         }
