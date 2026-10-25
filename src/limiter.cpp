@@ -13,8 +13,8 @@ namespace {
 
 // 0 while the limiter is off. The schedule is origin + index * frequency / fps, so the cap does not drift.
 int g_fps = 0;
-// Overwritten from the ini before any wait. present (false) is the default.
-bool g_early = false;
+// Overwritten from the ini before any wait. early (true) is the default.
+bool g_early = true;
 LONGLONG g_freq = 0;
 LONGLONG g_origin = 0;
 LONGLONG g_index = 0;
