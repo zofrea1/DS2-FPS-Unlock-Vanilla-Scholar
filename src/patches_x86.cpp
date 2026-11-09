@@ -95,6 +95,26 @@ __declspec(naked) void hk_step() {
     }
 }
 
+// Motion blur (FixMotionBlur). The lens filter (GXLensSimulationFilter, fn 0xE8D250) scales every velocity in
+// the blur buffer by g_vVelomapParam.x = app FPS / param[10] * param[9], with the FPS the frame-time sampler
+// measures (app 0x159A6E4 +0xC0 = sampler +0x48: frames / elapsed seconds, refreshed about once a second).
+// Velocities are written per frame (screen position now minus a frame ago, objects and camera alike), so that
+// scale turns them into the motion of a fixed 1/param[10] s: at 60 FPS one frame's motion, at 240 FPS four
+// frames' worth, smeared behind every moving thing (the ghosting trails). Scholar of the First Sin pins that
+// FPS at 30 (its lens +0x108 is never set) and clamps the FPS of its object pass to 20..60. This caps the
+// FPS read here at 60, the rate the PC game was made for, so a frame blurs the same share of its own motion
+// as at 60 FPS. At 60 FPS and below the game's value is used.
+void* g_blur_fps_back = nullptr;
+float g_blur_fps_cap = 60.0f;
+
+__declspec(naked) void hk_blur_fps() {
+    __asm {
+        movss xmm0, dword ptr [ecx + 0xC0]
+        minss xmm0, dword ptr [g_blur_fps_cap]
+        jmp dword ptr [g_blur_fps_back]
+    }
+}
+
 __declspec(naked) void hk_dur_weapon() {
     __asm {
         movss dword ptr [g_xmm_save], xmm1
@@ -383,6 +403,7 @@ BytePatch g_clamp;
 BytePatch g_jump;
 SpanPatch g_cloth;
 SpanPatch g_aspect_fit;
+SpanPatch g_blur_fps;
 
 struct Section {
     uint8_t* start;
@@ -533,6 +554,34 @@ bool patch_span(SpanPatch& patch, const uint8_t* pat, size_t n, const char* mask
         return false;
     }
     return write_span(patch, site, replacement, replace_n, name);
+}
+
+// mov ecx, [app] ; movss xmm0, [ecx+0C0h] ; movss xmm1, [edi+28h] in the lens filter (fn 0xE8D250, at 0xE8D86A).
+// The movss of the FPS (8 bytes) becomes a jmp to hk_blur_fps, which reads it capped and jumps back.
+const uint8_t kBlurFps[] = {0x8B, 0x0D, 0x00, 0x00, 0x00, 0x00, 0xF3, 0x0F, 0x10, 0x81, 0xC0,
+                            0x00, 0x00, 0x00, 0xF3, 0x0F, 0x10, 0x4F, 0x28};
+const char kBlurFpsMask[] = "xx????xxxxxxxxxxxxx";
+constexpr uint32_t kBlurFpsRva = 0xA8D86A;
+
+bool patch_motion_blur() {
+    constexpr const char* kName = "pch_LensSimulation_MotionBlurFps";
+    uint8_t* hit = find_unique(kBlurFps, sizeof(kBlurFps), kName, kBlurFpsMask);
+    if (!hit) {
+        LOG_ERROR("%s: apply failed", kName);
+        diagnose_miss(kName, kBlurFps, sizeof(kBlurFps), kBlurFpsMask, kBlurFpsRva);
+        return false;
+    }
+    uint8_t* site = hit + 6;
+    g_blur_fps_back = site + 8;
+    uint8_t jmp[8] = {0xE9, 0, 0, 0, 0, 0x90, 0x90, 0x90};
+    const int32_t rel = static_cast<int32_t>(reinterpret_cast<uintptr_t>(&hk_blur_fps) -
+                                             reinterpret_cast<uintptr_t>(site + 5));
+    std::memcpy(jmp + 1, &rel, 4);
+    if (!write_span(g_blur_fps, site, jmp, sizeof(jmp), kName)) {
+        return false;
+    }
+    LOG_INFO("FixMotionBlur: the motion blur scale uses at most %.0f FPS", g_blur_fps_cap);
+    return true;
 }
 
 // jmp full_fit over the start of the fit helper. Nothing returns into the rest of it.
@@ -1116,6 +1165,9 @@ bool patches_apply(const Settings& settings) {
         ok &= hook_named(g_world, &g_world_tramp, "hk_hkpWorld_UpdateExpectedDeltaTime", kWorld, sizeof(kWorld), 6,
                          reinterpret_cast<void*>(&hk_world), kWorldMask, kWorldRva);
     }
+    if (settings.fix_motion_blur) {
+        ok &= patch_motion_blur();
+    }
     return ok;
 }
 
@@ -1141,6 +1193,7 @@ void patches_remove() {
     g_proxy_update.remove();
     restore_span(g_cloth);
     restore_span(g_aspect_fit);
+    restore_span(g_blur_fps);
     g_camera_projection.remove();
     g_operator_projection.remove();
     g_operator_projection2.remove();

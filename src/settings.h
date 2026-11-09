@@ -23,6 +23,9 @@ struct Settings {
     bool cloth_fix = true;
     // Scale equipment durability loss by the frame time so it matches 60 FPS.
     bool durability_fix = true;
+    // Original game: cap the FPS its motion blur scale uses at 60, so the blur stays one frame's motion instead
+    // of trailing several frames (patches_x86.cpp). Scholar already does this itself; the key does nothing there.
+    bool fix_motion_blur = true;
     // Diagnostic: write the player's per-frame jump physics to DS2-FPS-Unlock-jumptrace-*.csv.
     bool jump_trace = false;
     // Fill the screen in exclusive fullscreen at any aspect ratio instead of a 16:9 picture between black bars.

@@ -116,6 +116,12 @@ void startup(HMODULE self) {
     LOG_INFO(" - TaeEventFix: %s", settings.tae_event_fix ? "true" : "false");
     LOG_INFO(" - ClothFix: %s", settings.cloth_fix ? "true" : "false");
     LOG_INFO(" - DurabilityFix: %s", settings.durability_fix ? "true" : "false");
+#ifdef _WIN64
+    LOG_INFO(" - FixMotionBlur: %s (Scholar's own motion blur scale already follows the frame time; nothing to patch)",
+             settings.fix_motion_blur ? "true" : "false");
+#else
+    LOG_INFO(" - FixMotionBlur: %s", settings.fix_motion_blur ? "true" : "false");
+#endif
     LOG_INFO(" - FixAspect: %s", settings.fix_aspect ? "true" : "false");
     LOG_INFO(" - SkipIntro: %s", settings.skip_intro ? "true" : "false");
     LOG_INFO(" - FullscreenRefreshRate: %d%s", settings.fullscreen_refresh,

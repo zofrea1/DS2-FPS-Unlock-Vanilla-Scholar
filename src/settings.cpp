@@ -97,6 +97,8 @@ Settings settings_load(const wchar_t* dll_path) {
             s.cloth_fix = parse_bool(val);
         } else if (key == "durabilityfix") {
             s.durability_fix = parse_bool(val);
+        } else if (key == "fixmotionblur" || key == "motionblurfix") {
+            s.fix_motion_blur = parse_bool(val);
         } else if (key == "jumptrace") {
             s.jump_trace = parse_bool(val);
         } else if (key == "fixaspect") {
