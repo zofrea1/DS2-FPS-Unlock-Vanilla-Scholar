@@ -28,6 +28,8 @@ struct Settings {
     // Fill the screen in exclusive fullscreen at any aspect ratio instead of a 16:9 picture between black bars.
     // Independent of fps_unlock.
     bool fix_aspect = true;
+    // Open the title screen at start-up without the notice and logos (intro.h). Independent of fps_unlock.
+    bool skip_intro = true;
     // Refresh rate exclusive fullscreen asks for (with fps_unlock). 0 = the desktop's own rate.
     int fullscreen_refresh = 0;
     // A DLL to forward to instead of the system DLL this one stands in for (proxy.h), UTF-8. Empty = none.

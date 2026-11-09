@@ -1,4 +1,5 @@
 #include "display.h"
+#include "intro.h"
 #include "jump_trace.h"
 #include "limiter.h"
 #include "log.h"
@@ -116,6 +117,7 @@ void startup(HMODULE self) {
     LOG_INFO(" - ClothFix: %s", settings.cloth_fix ? "true" : "false");
     LOG_INFO(" - DurabilityFix: %s", settings.durability_fix ? "true" : "false");
     LOG_INFO(" - FixAspect: %s", settings.fix_aspect ? "true" : "false");
+    LOG_INFO(" - SkipIntro: %s", settings.skip_intro ? "true" : "false");
     LOG_INFO(" - FullscreenRefreshRate: %d%s", settings.fullscreen_refresh,
              settings.fullscreen_refresh > 0 ? "" : " (the desktop's)");
     LOG_INFO(" - ChainDll: %s", settings.chain_dll.empty() ? "(none)" : settings.chain_dll.c_str());
@@ -129,6 +131,9 @@ void startup(HMODULE self) {
         LOG_INFO(" - JumpTrace: %s", open ? "writing DS2-FPS-Unlock-jumptrace-*.csv" : "could not open the CSV");
     }
 
+    if (settings.skip_intro) {
+        intro_install();
+    }
     if (!patches_apply(settings)) {
         LOG_ERROR("One or more patches failed. The game may be an unexpected build.");
     }

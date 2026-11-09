@@ -57,7 +57,9 @@ Steam Deck (Proton): set the game's launch options to `WINEDLLOVERRIDES="xinput1
 
 ## Configuration
 
-`FPSUnlock = false` leaves the framerate and gameplay unchanged. `FixAspect` (above) is separate.
+`FPSUnlock = false` leaves the framerate and gameplay unchanged. `FixAspect` (above) and `SkipIntro` are separate.
+
+`SkipIntro` (`[Startup]`, default `true`) skips the start-up notice and logos. The game opens the title screen at once, the way it does when you quit to the title from the game. The title screen is a chain of steps, and its first step chooses between the start-up screens (on the first visit after launch) and the title screen (on every later visit). The mod hands the first visit the later visits' choice, so no step is shortened or sped up and the title screen loads as usual. The skipped screens are the notice (3 seconds in Scholar of the First Sin, up to 10 seconds or a button in the original game) and the logos, each shown for 1.5 to 2 seconds plus its fades. Set it to `false` to see them. `IntroSkip` is accepted as the same key.
 
 `FPSUnlock = true` turns the whole fix on. The individual fixes have their own switches, all `true` by default: `GroundSnapFix`, `ForwardAttackFix` and `TaeEventFix` (described below), `ClothFix` (cloth stepped with the real frame time) and `DurabilityFix` (durability loss scaled to the frame time). `GroundSnapFix = false` falls back to the old jump workaround that never snaps. The original mod's names `JumpHeightFix` and `ClothSpeedFix` are also accepted.
 
