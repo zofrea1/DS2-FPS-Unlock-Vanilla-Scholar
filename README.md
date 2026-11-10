@@ -6,8 +6,8 @@ The mod removes the game's own limiter. `FPSLimit` (default 0) is a cap in frame
 
 | Game | Download | DLL to install |
 | --- | --- | --- |
-| Scholar of the First Sin (64-bit, DirectX 11) | release `v1.2.0-SCHOLAR-DX11` | `xinput1_3.dll` from that archive |
-| Original Dark Souls II, Vanilla (32-bit, DirectX 9) | release `v1.2.0-VANILLA-DX9` | `xinput1_3.dll` from that archive |
+| Scholar of the First Sin (64-bit, DirectX 11) | release `v1.3.0-SCHOLAR-DX11` | `xinput1_3.dll` from that archive |
+| Original Dark Souls II, Vanilla (32-bit, DirectX 9) | release `v1.3.0-VANILLA-DX9` | `xinput1_3.dll` from that archive |
 
 Put the DLL next to `DarkSoulsII.exe`, along with `DS2-FPS-Unlock.ini`. The executable on disk is not modified. The two games cannot share a DLL.
 
